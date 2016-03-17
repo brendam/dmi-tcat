@@ -369,11 +369,12 @@ function gap_record($role, $ustart, $uend) {
     $dbh = pdo_connect();
     $sql = "insert into tcat_error_gap ( type, start, end ) values ( :role, :start, :end)";
     $h = $dbh->prepare($sql);
-    $ustart = toDateTime($ustart);
-    $uend = toDateTime($uend);
+    $mysqlstart = toDateTime($ustart);
+    $mysqlend = toDateTime($uend);
+    logit("controller.error.log", "(debug) unix timestamps start $ustart, end $uend become MySQL datestamps start '$mysqlstart', end '$mysqlend'");
     $h->bindParam(":role", $role, PDO::PARAM_STR);
-    $h->bindParam(":start", $ustart, PDO::PARAM_STR);
-    $h->bindParam(":end", $uend, PDO::PARAM_STR);
+    $h->bindParam(":start", $mysqlstart, PDO::PARAM_STR);
+    $h->bindParam(":end", $mysqlend, PDO::PARAM_STR);
     $h->execute();
 }
 
