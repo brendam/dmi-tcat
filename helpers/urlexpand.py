@@ -163,6 +163,8 @@ def unshorten(url):
         except ValueError as e:
             #print "error %s\t%s" % (url,e)
             record = ('', '', 0, url)
+        except:
+            record = ('', '', 0, url)
 
         finally:
             if initialhost not in whitelist:
