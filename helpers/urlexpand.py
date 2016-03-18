@@ -1,24 +1,45 @@
-import sys
-import gevent
-from gevent import socket
-from gevent.pool import Pool
-from gevent.timeout import Timeout
-import urlparse
-import sys
-from random import shuffle
-import MySQLdb
-import time
-from collections import deque
-import re
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-from gevent import monkey
-monkey.patch_all(thread=False)
+CONCURRENCY = 4
 
 import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-# set socket timeout in seconds
+import multiprocessing
+
+import urlparse
+import sys
+import MySQLdb
+import time
+import re
+from random import shuffle
+from collections import deque
+
+import codecs
+codecs.register(lambda name: codecs.lookup('utf8') if name == 'utf8mb4' else None)
+
 socket_timeout = 7
-socket.setdefaulttimeout(socket_timeout)
+request_headers = {'User-agent': 'Mozilla/5.0 (Windows NT 5.1; rv:31.0) Gecko/20100101 Firefox/31.0'}
+working = {}
+sleepers = {}
+updates = []
+current_table = ""
+
+# Disable rate-limiting of requests to these domains:
+whitelist = [ 'j.mp',
+              'doubleclick.net',
+              'ow.ly',
+              'bit.ly',
+              'goo.gl',
+              'dld.bz',
+              'tinyurl.com',
+              'fp.me',
+              'wp.me',
+              'is.gd',
+              'twitter.com'
+            ]
 
 db_host = 'localhost'
 db_user = 'root'
@@ -43,33 +64,12 @@ with open('../config.php', 'r') as f:
             db_db = result.group(1)
 f.closed
 
-db = MySQLdb.connect(host=db_host, user=db_user, passwd=db_pass, db=db_db)
+db = MySQLdb.connect(host=db_host, user=db_user, passwd=db_pass, db=db_db, charset='utf8mb4')
 cursor = db.cursor()
-
-on_busy_wait = 20
-
-finished = 0
-working = {}
-sleepers = {}
-pool = Pool(50)
-updates = []
-
-request_headers = {'User-agent': 'Mozilla/5.0 (Windows NT 5.1; rv:31.0) Gecko/20100101 Firefox/31.0'}
-
-# Disable rate-limiting of requests to these domains:
-
-whitelist = [ 'j.mp',
-              'doubleclick.net',
-              'ow.ly',
-              'bit.ly',
-              'goo.gl',
-              'dld.bz',
-              'tinyurl.com',
-              'fp.me',
-              'wp.me',
-              'is.gd',
-              'twitter.com'
-            ]
+# Enforce UTF-8 for the connection.
+#cursor.execute('SET NAMES utf8')
+#cursor.execute("SET CHARACTER SET utf8")
+#cursor.execute("SET character_set_connection=utf8")
 
 def get_twitter_tables(table = None):
     if table is not None:
@@ -87,7 +87,7 @@ def get_urls_from_db(table):
     query = "SELECT DISTINCT url_expanded FROM " + table  + """
             WHERE (domain IS NULL OR domain = '') 
             AND (error_code IS NULL OR error_code = '')
-            AND (url_expanded != '' AND url_expanded IS NOT NULL)
+            AND (url_expanded != '' AND url_expanded IS NOT NULL) AND url_expanded like '%medium%'
             """
     rs = cursor.execute(query)
     urls = deque()
@@ -96,60 +96,72 @@ def get_urls_from_db(table):
     print 'DATABASE -- Returning %s urls from %s..' % (len(urls), table)
     return urls
 
-
-def job(url, table):
-    global finished
+def unshorten(url):
+    global working, current_table
+    
+    status = True
+    url_followed = url
+    
+    print url
+    
     # Use the domainname from url_expanded to rate limit requests to certain hostnames (with timings stored in sleepers dict)
     initialhost = urlparse.urlparse(url).hostname
     if initialhost.startswith('www.'):
         initialhost = initialhost[4:]
-
-    try:
-        if sleepers.has_key(initialhost):
-            # All dictionary access here is in try/catch because keys may be removed by another thread, causing exceptions
-            try:
-                timediff = int(time.time()) - sleepers[initialhost]
-                if (timediff < on_busy_wait):
-                    sleepnow = on_busy_wait - timediff
-                    time.sleep(sleepnow)
+        
+    if working.has_key(initialhost):
+        time.sleep(0.25)
+        status = False
+    else:
+        status_code = 0
+        if initialhost not in whitelist:
+            working[initialhost] = True
+            print "%s working" % len(working)
+        try:
+            if sleepers.has_key(initialhost):
+                # All dictionary access here is in try/catch because keys may be removed by another thread, causing exceptions
                 try:
-                    del sleepers[initialhost]
+                    timediff = int(time.time()) - sleepers[initialhost]
+                    if (timediff < on_busy_wait):
+                        sleepnow = on_busy_wait - timediff
+                        time.sleep(sleepnow)
+                    try:
+                        del sleepers[initialhost]
+                    except:
+                        pass
                 except:
                     pass
-            except:
-                pass
 
-        resp = requests.get(url, headers=request_headers, timeout=socket_timeout, verify=False)
-        url_followed = resp.url
-        status_code = resp.status_code
+            resp = requests.get(url, headers=request_headers, timeout=socket_timeout, verify=False)
+            url_followed = resp.url
+            status_code = resp.status_code
 
-        hostname = urlparse.urlparse(url_followed).hostname
-        if hostname.startswith('www.'):
-            hostname = hostname[4:]
+            hostname = urlparse.urlparse(url_followed).hostname
+            if hostname.startswith('www.'):
+                hostname = hostname[4:]
 
-        if status_code == 429:
-            sleepers[hostname] = int(time.time())
+            if status_code == 429:
+                sleepers[hostname] = int(time.time())
+                print "%s sleepers" % len(sleepers)
+
+            record = (url_followed, hostname, status_code, url)
+
+        except (requests.exceptions.RequestException, requests.exceptions.ConnectionError, requests.exceptions.URLRequired, requests.exceptions.TooManyRedirects, requests.exceptions.Timeout) as e:
+            print "error %s\t%s" % (url,e)
+            record = ('', '', 0, url)
+
+        finally:
+            if initialhost not in whitelist:
+                del working[initialhost]
+    
+    return record, status
         
-        record = (url_followed, hostname, status_code, url)
-        update_row(record, table)
-
-    except (requests.exceptions.RequestException, requests.exceptions.ConnectionError, requests.exceptions.URLRequired, requests.exceptions.TooManyRedirects, requests.exceptions.Timeout) as e:
-        record = ('', '', 0, url)
-        update_row(record, table)
-
-    finally:
-        if initialhost not in whitelist:
-            del working[initialhost]
-        finished += 1
-
-
 def update_row(record, table):
     #print "RESULTS -- %s, %s to insert into %s" % (record[2], record[0], table) 
     global updates
     updates.append(record)
     if len(updates) == 500:
         flush_db_queue(table)
-
 
 def flush_db_queue(table):
     global updates
@@ -158,42 +170,36 @@ def flush_db_queue(table):
     cursor.executemany(query, updates)
     updates[:] = []      
 
-
 def main(argv = None):
     total = 0
+    finished = 0
+    #multiprocessing.set_start_method("spawn")
+    pool = multiprocessing.Pool(processes=CONCURRENCY)
     try:
         table = argv[0]
     except (TypeError, IndexError):
         print "No tablename provided"
         table = None
+        
     for _table in get_twitter_tables(table):
         urls = get_urls_from_db(_table)
+        if len(urls) == 0:
+            continue
         total += len(urls)
         shuffle(urls)
-        while len(urls):
-            u = urls.popleft()
-            host = urlparse.urlparse(u).hostname
-            if host.startswith('www.'):
-                host = host[4:]
-
-            if working.has_key(host):
-                time.sleep(0.25)
-                # Useful debug line:
-                # print "sleeping with thread count " + str(50 - pool.free_count())
-                urls.append(u)
-                continue
-
-            if host not in whitelist:
-                working[host] = True
-            pool.spawn(job, u, _table)
-
-        pool.join()
+        for record, status in pool.imap_unordered(unshorten, urls):
+            if status == False:
+                urls.append(url)
+            # record = (url_followed, hostname, status_code, url)
+            print "%s\t%s\t%s\t%s\t%s" % (status, record[2], record[3], record[1], record[0])
+            update_row(record, _table)
+            finished += 1
         
         # Flush left over updates in the queue to the db
         flush_db_queue(_table)    
             
     print ('RESULTS -- finished: %s/%s' % (finished, total))
-
+    pool.close()
 
 if __name__ == '__main__':
     try:
@@ -201,4 +207,4 @@ if __name__ == '__main__':
     except IndexError:
         main()
     else:
-        main(sys.argv[1:])
+        main(sys.argv[1:])    
