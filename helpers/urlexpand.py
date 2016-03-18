@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-CONCURRENCY = 4
+CONCURRENCY = 10
 
 import sys
 import re
@@ -48,7 +48,8 @@ whitelist = [ 'j.mp',
               'fp.me',
               'wp.me',
               'is.gd',
-              'twitter.com'
+              'twitter.com',
+              't.co'
             ]
 
 db_host = 'localhost'
@@ -76,10 +77,6 @@ f.closed
 
 db = MySQLdb.connect(host=db_host, user=db_user, passwd=db_pass, db=db_db, charset='utf8mb4')
 cursor = db.cursor()
-# Enforce UTF-8 for the connection.
-#cursor.execute('SET NAMES utf8')
-#cursor.execute("SET CHARACTER SET utf8")
-#cursor.execute("SET character_set_connection=utf8")
 
 def get_twitter_tables(table = None):
     if table is not None:
@@ -92,12 +89,10 @@ def get_twitter_tables(table = None):
 
 def get_urls_from_db(table):
     print 'DATABASE -- Getting urls from %s ...' % table
-    # update_query = "UPDATE " + table + " SET url_expanded = url WHERE url_expanded IS NULL"
-    # conn.query(update_query)
     query = "SELECT DISTINCT url_expanded FROM " + table  + """
-            WHERE (domain IS NULL OR domain = '') 
+            WHERE (domain IS NULL OR domain = '')
             AND (error_code IS NULL OR error_code = '')
-            AND (url_expanded != '' AND url_expanded IS NOT NULL) AND url_expanded like '%medium%'
+            AND (url_expanded != '' AND url_expanded IS NOT NULL)
             """
     rs = cursor.execute(query)
     urls = deque()
@@ -108,17 +103,17 @@ def get_urls_from_db(table):
 
 def unshorten(url):
     global working, current_table
-    
+
     status = True
     url_followed = url
-    
-    print url
-    
+
+    #print url
+
     # Use the domainname from url_expanded to rate limit requests to certain hostnames (with timings stored in sleepers dict)
     initialhost = urlparse.urlparse(url).hostname
     if initialhost.startswith('www.'):
         initialhost = initialhost[4:]
-        
+
     if working.has_key(initialhost):
         time.sleep(0.25)
         status = False
@@ -126,7 +121,7 @@ def unshorten(url):
         status_code = 0
         if initialhost not in whitelist:
             working[initialhost] = True
-            print "%s working" % len(working)
+            #print "%s working" % len(working)
         try:
             if sleepers.has_key(initialhost):
                 # All dictionary access here is in try/catch because keys may be removed by another thread, causing exceptions
@@ -152,7 +147,7 @@ def unshorten(url):
 
             if status_code == 429:
                 sleepers[hostname] = int(time.time())
-                print "%s sleepers" % len(sleepers)
+                #print "%s sleepers" % len(sleepers)
 
             record = (url_followed, hostname, status_code, url)
 
@@ -163,11 +158,11 @@ def unshorten(url):
         finally:
             if initialhost not in whitelist:
                 del working[initialhost]
-    
+
     return record, status
-        
+
 def update_row(record, table):
-    #print "RESULTS -- %s, %s to insert into %s" % (record[2], record[0], table) 
+    #print "RESULTS -- %s, %s to insert into %s" % (record[2], record[0], table)
     global updates
     updates.append(record)
     if len(updates) == 500:
@@ -175,10 +170,10 @@ def update_row(record, table):
 
 def flush_db_queue(table):
     global updates
-    query = "UPDATE " + table + " SET url_followed = %s, domain = %s, error_code = %s WHERE url_expanded = %s"        
+    query = "UPDATE " + table + " SET url_followed = %s, domain = %s, error_code = %s WHERE url_expanded = %s"
     print "DATABASE -- Flushing %s records to the db" % len(updates)
     cursor.executemany(query, updates)
-    updates[:] = []      
+    updates[:] = []
 
 def main(argv = None):
     total = 0
@@ -190,7 +185,7 @@ def main(argv = None):
     except (TypeError, IndexError):
         print "No tablename provided"
         table = None
-        
+
     for _table in get_twitter_tables(table):
         urls = get_urls_from_db(_table)
         if len(urls) == 0:
@@ -200,14 +195,13 @@ def main(argv = None):
         for record, status in pool.imap_unordered(unshorten, urls):
             if status == False:
                 urls.append(url)
-            # record = (url_followed, hostname, status_code, url)
-            print "%s\t%s\t%s\t%s\t%s" % (status, record[2], record[3], record[1], record[0])
+            #print "%s\t%s\t%s\t%s\t%s" % (status, record[2], record[3], record[1], record[0])
             update_row(record, _table)
             finished += 1
-        
+
         # Flush left over updates in the queue to the db
-        flush_db_queue(_table)    
-            
+        flush_db_queue(_table)
+
     print ('RESULTS -- finished: %s/%s' % (finished, total))
     pool.close()
 
@@ -217,4 +211,4 @@ if __name__ == '__main__':
     except IndexError:
         main()
     else:
-        main(sys.argv[1:])    
+        main(sys.argv[1:])
