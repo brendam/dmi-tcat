@@ -4,6 +4,7 @@
 CONCURRENCY = 10
 
 import sys
+import datetime
 import re
 import requests
 pattern = re.compile('([0-9]*)\.([0-9*])')
@@ -83,8 +84,12 @@ def get_twitter_tables(table = None):
         query = "SHOW TABLES LIKE '%s'" % table
     else:
         query = "SHOW TABLES LIKE '%_urls'"
-    cursor.execute(query)
-    return [t[0] for t in cursor.fetchall()]
+    rs = cursor.execute(query)
+    tables = deque()
+    for t in cursor.fetchall():
+        tables.append(t[0])
+    shuffle(tables)
+    return tables
 
 
 def get_urls_from_db(table):
@@ -99,6 +104,7 @@ def get_urls_from_db(table):
     for r in cursor.fetchall():
         urls.append(r[0])
     print 'DATABASE -- Returning %s urls from %s..' % (len(urls), table)
+    shuffle(urls)
     return urls
 
 def unshorten(url):
@@ -152,7 +158,10 @@ def unshorten(url):
             record = (url_followed, hostname, status_code, url)
 
         except (requests.exceptions.RequestException, requests.exceptions.ConnectionError, requests.exceptions.URLRequired, requests.exceptions.TooManyRedirects, requests.exceptions.Timeout) as e:
-            print "error %s\t%s" % (url,e)
+            #print "error %s\t%s" % (url,e)
+            record = ('', '', 0, url)
+        except ValueError as e:
+            #print "error %s\t%s" % (url,e)
             record = ('', '', 0, url)
 
         finally:
@@ -171,7 +180,7 @@ def update_row(record, table):
 def flush_db_queue(table):
     global updates
     query = "UPDATE " + table + " SET url_followed = %s, domain = %s, error_code = %s WHERE url_expanded = %s"
-    print "DATABASE -- Flushing %s records to the db" % len(updates)
+    print "DATABASE -- Flushing %s records to the db\t%s" % (len(updates),datetime.datetime.now())
     cursor.executemany(query, updates)
     updates[:] = []
 
@@ -191,7 +200,6 @@ def main(argv = None):
         if len(urls) == 0:
             continue
         total += len(urls)
-        shuffle(urls)
         for record, status in pool.imap_unordered(unshorten, urls):
             if status == False:
                 urls.append(url)
@@ -201,6 +209,7 @@ def main(argv = None):
 
         # Flush left over updates in the queue to the db
         flush_db_queue(_table)
+        print "\n"
 
     print ('RESULTS -- finished: %s/%s' % (finished, total))
     pool.close()
