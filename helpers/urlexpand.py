@@ -12,8 +12,8 @@ matches = pattern.match(requests.__version__)
 if matches:
     major = int(matches.group(1))
     minor = int(matches.group(2))
-    if major < 3 and minor < 9:
-        print "Your version of the requests library is too old. You will want to upgrade to the 2.9.x series or later"
+    if major < 3 and minor < 5:
+        print "Your version of the requests library is too old. You will want to upgrade to the 2.5.x series or later"
         print "Using pip: pip install --upgrade requests"
         sys.exit()
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
