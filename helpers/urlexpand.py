@@ -4,19 +4,19 @@
 CONCURRENCY = 4
 
 import sys
-import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 import re
+import requests
 pattern = re.compile('([0-9]*)\.([0-9*])')
 matches = pattern.match(requests.__version__)
 if matches:
-    major = matches.group(1)
-    minor = matches.group(2)
+    major = int(matches.group(1))
+    minor = int(matches.group(2))
     if major < 3 and minor < 9:
         print "Your version of the requests library is too old. You will want to upgrade to the 2.9.x series or later"
         print "Using pip: pip install --upgrade requests"
         sys.exit()
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 import multiprocessing
 
