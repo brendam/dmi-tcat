@@ -12,8 +12,10 @@ matches = pattern.match(requests.__version__)
 if matches:
     major = int(matches.group(1))
     minor = int(matches.group(2))
-    if major < 3 and minor < 9:
-        print "Your version of the requests library is too old. You will want to upgrade to the 2.9.x series or later"
+    if major < 3 and minor < 5:
+	print major
+	print minor
+        print "Your version of the requests library is too old. You will want to upgrade to the 2.5.x series or later"
         print "Using pip: pip install --upgrade requests"
         sys.exit()
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -172,17 +174,17 @@ def unshorten(url):
 
     return record, status
 
-def update_row(record, table):
+def update_row(record, table, urls_cur_len):
     #print "RESULTS -- %s, %s to insert into %s" % (record[2], record[0], table)
     global updates
     updates.append(record)
     if len(updates) == 500:
-        flush_db_queue(table)
+        flush_db_queue(table, urls_cur_len)
 
-def flush_db_queue(table):
+def flush_db_queue(table, urls_cur_len):
     global updates
     query = "UPDATE " + table + " SET url_followed = %s, domain = %s, error_code = %s WHERE url_expanded = %s"
-    print "DATABASE -- Flushing %s records to the db\t%s" % (len(updates),datetime.datetime.now())
+    print "DATABASE -- Flushing %s/%s records from %s to the db\t%s" % (len(updates),urls_cur_len,table,datetime.datetime.now())
     cursor.executemany(query, updates)
     updates[:] = []
 
@@ -199,18 +201,19 @@ def main(argv = None):
 
     for _table in get_twitter_tables(table):
         urls = get_urls_from_db(_table)
-        if len(urls) == 0:
+	urls_cur_len = len(urls)
+        if urls_cur_len == 0:
             continue
         total += len(urls)
         for record, status in pool.imap_unordered(unshorten, urls):
             if status == False:
                 urls.append(url)
             #print "%s\t%s\t%s\t%s\t%s" % (status, record[2], record[3], record[1], record[0])
-            update_row(record, _table)
+            update_row(record, _table, urls_cur_len)
             finished += 1
 
         # Flush left over updates in the queue to the db
-        flush_db_queue(_table)
+        flush_db_queue(_table, urls_cur_len)
         print "\n"
 
     print ('RESULTS -- finished: %s/%s' % (finished, total))
