@@ -1922,11 +1922,11 @@ function tracker_streamCallback($data, $length, $metrics) {
 
                     $ratelimit = $current;
 
-                    if time() > ($ex_report + RATELIMIT_MAIL_HOURS * 60) {
+                    if (time() > ($ex_report + RATELIMIT_MAIL_HOURS * 60)) {
                         # report every RATELIMIT_MAIL_HOURS, not just on a new ratelimit event
                         ratelimit_report_problem();
                         // logit(CAPTURE . ".error.log", "you have hit a rate limit. consider reducing your query bin sizes");
-                        $ex_report = time()
+                        $ex_report = time();
                     }
 
                     if (time() > ($ex_start + RATELIMIT_SILENCE * 6)) {
