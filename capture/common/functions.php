@@ -20,7 +20,7 @@ function geophp_sane() {
         $msg = "geoPHP needs the GEOS and its PHP extension (please download it at: http://trac.osgeo.org/geos/)";
         $sane = false;
     } else {
-        // Is the Digital Methods lab in Amsterdam? 
+        // Is the Digital Methods lab in Amsterdam?
         $point_lng = 4.893346; $point_lat = 52.369042;
         $sw_lng = 4.768520; $sw_lat = 52.321629;
         $ne_lng = 5.017270; $ne_lat = 52.425129;
@@ -109,7 +109,7 @@ function create_bin($bin_name, $dbh = false) {
             `tweet_id` bigint(20) NOT NULL,
             `created_at` datetime,
             `from_user_name` varchar(255),
-            `from_user_id` bigint, 
+            `from_user_id` bigint,
             `to_user` varchar(255),
             `to_user_id` bigint,
             PRIMARY KEY (`id`),
@@ -193,7 +193,7 @@ function create_bin($bin_name, $dbh = false) {
             `domain` varchar(2048),
             `error_code` varchar(64),
             PRIMARY KEY (`id`),
-                    KEY `tweet_id` (`tweet_id`),                
+                    KEY `tweet_id` (`tweet_id`),
                     KEY `created_at` (`created_at`),
                     KEY `from_user_id` (`from_user_id`),
                     FULLTEXT KEY `url_followed` (`url_followed`),
@@ -383,6 +383,7 @@ function gap_record($role, $ustart, $uend) {
 
 function ratelimit_report_problem() {
     if (defined('RATELIMIT_MAIL_HOURS') && RATELIMIT_MAIL_HOURS > 0) {
+        # this doesn't prevent emails being sent if records exist within last RATELIMIT_MAIL_HOURS
         $sql = "select count(*) as cnt from tcat_error_ratelimit where start > (now() - interval " . RATELIMIT_MAIL_HOURS . " hour)";
         $result = mysql_query($sql);
         if ($row = mysql_fetch_assoc($result)) {
@@ -400,7 +401,7 @@ function toDateTime($unixTimestamp) {
 }
 
 /*
- * Inform controller a task wants to update its queries 
+ * Inform controller a task wants to update its queries
  */
 
 function web_reload_config_role($role) {
@@ -626,7 +627,7 @@ function getActiveLocationsImploded() {
 
 /*
  * Explode a geo location query string to an associative array of arrays
- * 
+ *
  * (0) => array ( sw_lng => ..
  *                sw_lat => ..
  *                ne_lng => ..
@@ -906,10 +907,10 @@ function capture_signal_handler_term($signo) {
 }
 
 /**
- * 
+ *
  * Tweet entity
  * Based on Twitter API 1.1
- * 
+ *
  */
 class Tweet {
 
@@ -1670,7 +1671,7 @@ class TwitterRelations {
             $q = $dbh->prepare(
                     "INSERT INTO " . $bin_name . '_relations' . "
 				(user1_id, user1_name, type, observed_at, user2_id, user2_name, user2_realname)
-				VALUES 
+				VALUES
 				(:user1_id, :user1_name, :type, :observed_at, :user2_id, :user2_name, :user2_realname);");
             $q->bindParam(":user1_id", $this->id, PDO::PARAM_INT); // @otod id_str?
             $q->bindParam(":user1_name", $this->screen_name, PDO::PARAM_STR);
@@ -1686,13 +1687,13 @@ class TwitterRelations {
     public static function create_relations_tables(PDO $dbh, $bin_name) {
         $sql = "CREATE TABLE IF NOT EXISTS " . $bin_name . "_relations (
 		user1_id bigint NOT NULL,
-                user1_name varchar(255) NOT NULL,		
+                user1_name varchar(255) NOT NULL,
                 type varchar(255),
 		observed_at datetime,
                 user2_id bigint NOT NULL,
 		user2_name varchar(255) NOT NULL,
                 user2_realname varchar(255),
-		KEY `user1_id` (`user1_id`), 
+		KEY `user1_id` (`user1_id`),
                 KEY `user2_id` (`user2_id`)
 		) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4";
 
@@ -1908,7 +1909,7 @@ function tracker_streamCallback($data, $length, $metrics) {
 
         // handle rate limiting
         if (array_key_exists('limit', $data)) {
-            global $ratelimit, $exceeding, $ex_start;
+            global $ratelimit, $exceeding, $ex_start, $ex_report;
             if (isset($data['limit'][CAPTURE])) {
                 $current = $data['limit'][CAPTURE];
                 if ($current > $ratelimit) {
@@ -1916,18 +1917,24 @@ function tracker_streamCallback($data, $length, $metrics) {
                     if (!$exceeding) {
                         // new disturbance!
                         $ex_start = time();
+                        $exceeding = 1;
+                    }
+
+                    $ratelimit = $current;
+
+                    if time() > ($ex_report + RATELIMIT_MAIL_HOURS * 60) {
+                        # report every RATELIMIT_MAIL_HOURS, not just on a new ratelimit event
                         ratelimit_report_problem();
                         // logit(CAPTURE . ".error.log", "you have hit a rate limit. consider reducing your query bin sizes");
+                        $ex_report = time()
                     }
-                    $ratelimit = $current;
-                    $exceeding = 1;
 
                     if (time() > ($ex_start + RATELIMIT_SILENCE * 6)) {
                         // every half an hour (or: heartbeat x 6), record, but keep the exceeding flag set
                         ratelimit_record($ratelimit, $ex_start);
                         $ex_start = time();
                     }
-                } elseif ($exceeding && time() < ($ex_start + RATELIMIT_SILENCE)) {
+                } elseif ($exceeding && time() > ($ex_start + RATELIMIT_SILENCE)) {
                     // we are now no longer exceeding the rate limit
                     // to avoid flip-flop we only reset our values after the minimal heartbeat has passed
                     // store rate limit disturbance information in the database
@@ -2010,7 +2017,7 @@ function processtweets($capturebucket) {
                          *
                          * Geolocation tracking is done inside the capture role: track
                          * Geolocation query bins have a special type: geotrack
-                         * Geolocation phrases have a specific format: 
+                         * Geolocation phrases have a specific format:
                          *             = these phrases are a chain of geoboxes defined as 4 comma separated values (sw long, sw lat, ne long, ne lat)
                          *             = multiple world areas can thus be defined per bin
                          *
@@ -2018,7 +2025,7 @@ function processtweets($capturebucket) {
                          *
                          * 1) Twitter will give us all the tweets which have excplicit GPS coordinates inside one of our queried areas.
                          * 2) Additionaly Twitter give us those tweets with a user 'place' definition. A place (i.e. Paris) is itself a (set of) gps polygons
-                         *    Twitter returns the tweets if one of these place polygons covers the same area as our geo boxes.  
+                         *    Twitter returns the tweets if one of these place polygons covers the same area as our geo boxes.
                          *
                          * And matching (by us)
                          *
@@ -2042,11 +2049,11 @@ function processtweets($capturebucket) {
                                     // logit(CAPTURE . ".error.log", "(debug) tweet with lng $tweet_lng and lat $tweet_lat versus (sw: " . $box['sw_lng'] . "," . $box['sw_lat'] . " ne: " . $box['ne_lng'] . "," . $box['ne_lat'] . ") falls outside the area");
                                 }
                             }
-                        } else { 
+                        } else {
 
                             // this is a gps tracking query, but the tweet has no gps geo data
                             // Twitter may have matched this tweet based on the user-defined location data
-                           
+
                             if (array_key_exists('place', $data) && is_array($data['place']) && array_key_exists('bounding_box', $data['place'])) {
 
                                 // Make a geoPHP object of the polygon(s) defining the place, by using a WKT (well-known text) string
