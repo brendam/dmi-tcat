@@ -1673,12 +1673,26 @@ class Tweet {
             if (!isset($data["retweeted_status"]["text"])) {
                 /* running in extended context */
                 $retweet_text = $data["retweeted_status"]["full_text"];
+
+                /* add the retweeting user to the user mentions - not sure this code is the right way to put the extra mention at the front? */
+                $data["retweeted_status"]["entities"]["user_mentions"] = $data["entities"]["user_mentions"][0] + $data["retweeted_status"]["entities"]["user_mentions"]
+                /* pull the entities up from the retweeted status */
+                $data["entities"] = $data["retweeted_status"]["entities"];
+
+
             } else if (!array_key_exists('extended_tweet', $data["retweeted_status"])) {
                 /* running in compatibility mode BUT the 'extended_tweet' JSON field is not available. this means the retweet is <= 140 characters */
                 $retweet_text = $data["retweeted_status"]["text"];
             } else {
                 /* Running in compatibility mode AND the 'extended_tweet' JSON field is available. this means the retweet is > 140 characters */
                 $retweet_text = $data["retweeted_status"]["extended_tweet"]["full_text"];
+
+                /* add the retweeting user to the user mentions - not sure this code is the right way to put the extra mention at the front? */
+                $data["retweeted_status"]["extended_tweet"]["entities"]["user_mentions"] = $data["entities"]["user_mentions"][0] + $data["retweeted_status"]["extended_tweet"]["entities"]["user_mentions"]
+                /* pull the entities up from the retweeted status */
+                $data["entities"] = $data["retweeted_status"]["extended_tweet"]["entities"];
+
+
             }
 
             $store_text = "RT @" . $data["retweeted_status"]["user"]["screen_name"] . ": " . $retweet_text;
