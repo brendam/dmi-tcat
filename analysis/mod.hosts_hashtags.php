@@ -29,22 +29,25 @@ require_once __DIR__ . '/common/CSV.class.php';
 
         <?php
         validate_all_variables();
+        dataset_must_exist();
+        $dbh = pdo_connect();
+        pdo_unbuffered($dbh);
         $filename = get_filename_for_export("hostHashtag");
         $csv = new CSV($filename, $outputformat);
 
         $collation = current_collation();
 
         $sql = "SELECT COUNT(LOWER(h.text COLLATE $collation)) AS frequency, LOWER(h.text COLLATE $collation) AS hashtag, u.domain COLLATE $collation AS domain FROM ";
-        $sql .= $esc['mysql']['dataset'] . "_tweets t, " . $esc['mysql']['dataset'] . "_hashtags h, " . $esc['mysql']['dataset'] . "_urls u ";
+        $sql .= $esc['mysql']['dataset'] . "_hashtags h, " . $esc['mysql']['dataset'] . "_urls u, " . $esc['mysql']['dataset'] . "_tweets t ";
         $where = "t.id = h.tweet_id AND h.tweet_id = u.tweet_id AND u.url_followed !='' AND ";
         $sql .= sqlSubset($where);
         $sql .= " GROUP BY u.domain COLLATE $collation, LOWER(h.text COLLATE $collation) ORDER BY frequency DESC";
         //print $sql." - <br>";
 
-        $sqlresults = mysql_unbuffered_query($sql);
-
+        $rec = $dbh->prepare($sql);
+        $rec->execute();
         $csv->writeheader(array("frequency", "hashtag", "domain"));
-        while ($res = mysql_fetch_assoc($sqlresults)) {
+        while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
             $csv->newrow();
             $csv->addfield($res['frequency']);
             $csv->addfield($res['hashtag']);
@@ -52,7 +55,6 @@ require_once __DIR__ . '/common/CSV.class.php';
             $csv->writerow();
             $urlHashtags[$res['domain']][$res['hashtag']] = $res['frequency'];
         }
-        mysql_free_result($sqlresults);
         $csv->close();
 
         echo '<fieldset class="if_parameters">';

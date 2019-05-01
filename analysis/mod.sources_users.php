@@ -8,7 +8,7 @@ require_once __DIR__ . '/common/Gexf.class.php';
 
 <html xmlns="http://www.w3.org/1999/xhtml">
     <head>
-        <title>TCAT :: Source / hashtag co-occurence</title>
+        <title>TCAT :: Source / user co-occurence</title>
 
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
 
@@ -24,7 +24,7 @@ require_once __DIR__ . '/common/Gexf.class.php';
 
     <body>
 
-        <h1>TCAT :: Source / hashtag co-occurence</h1>
+        <h1>TCAT :: Source / user co-occurence</h1>
 
         <?php
 
@@ -32,15 +32,14 @@ require_once __DIR__ . '/common/Gexf.class.php';
         dataset_must_exist();
         $dbh = pdo_connect();
         pdo_unbuffered($dbh);
-        $filename = get_filename_for_export("sourceHashtag", '', 'gexf');
+        $filename = get_filename_for_export("sourceUser", '', 'gexf');
         $collation = current_collation();
 
 		//print_r($_GET);
 
-        $sql = "SELECT LOWER(t.source COLLATE $collation) AS source, LOWER(h.text COLLATE $collation) AS hashtag FROM ";
-        $sql .= $esc['mysql']['dataset'] . "_hashtags h, " . $esc['mysql']['dataset'] . "_tweets t ";
-        $where = "t.id = h.tweet_id AND ";
-        $sql .= sqlSubset($where);
+        $sql = "SELECT LOWER(t.source COLLATE $collation) AS source, LOWER(t.from_user_name COLLATE $collation) AS user FROM ";
+        $sql .= $esc['mysql']['dataset'] . "_tweets t ";
+        $sql .= sqlSubset();
 
         $rec = $dbh->prepare($sql);
         $rec->execute();
@@ -50,23 +49,23 @@ require_once __DIR__ . '/common/Gexf.class.php';
 			$res['source'] = preg_replace("/[ \s\t]+/", " ", $res['source']);
 			$res['source'] = trim($res['source']);
 
-			if(!isset($sourcesHashtags[$res['source']][$res['hashtag']])) {
-				 $sourcesHashtags[$res['source']][$res['hashtag']] = 0;
+			if(!isset($sourcesUsers[$res['source']][$res['user']])) {
+				 $sourcesUsers[$res['source']][$res['user']] = 0;
 			}
-			$sourcesHashtags[$res['source']][$res['hashtag']]++;
+			$sourcesUsers[$res['source']][$res['user']]++;
         }
 
         $gexf = new Gexf();
-        $gexf->setTitle("source-hashtag " . $filename);
+        $gexf->setTitle("source-user " . $filename);
         $gexf->setEdgeType(GEXF_EDGE_UNDIRECTED);
         $gexf->setCreator("tools.digitalmethods.net");
-        foreach ($sourcesHashtags as $source => $hashtags) {
-            foreach ($hashtags as $hashtag => $frequency) {
+        foreach ($sourcesUsers as $source => $users) {
+            foreach ($users as $user => $frequency) {
                 $node1 = new GexfNode($source);
                 $node1->addNodeAttribute("type", 'source', $type = "string");
                 $gexf->addNode($node1);
-                $node2 = new GexfNode($hashtag);
-                $node2->addNodeAttribute("type", 'hashtag', $type = "string");
+                $node2 = new GexfNode($user);
+                $node2->addNodeAttribute("type", 'user', $type = "string");
                 $gexf->addNode($node2);
                 $edge_id = $gexf->addEdge($node1, $node2, $frequency);
             }

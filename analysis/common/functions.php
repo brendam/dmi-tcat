@@ -1,16 +1,19 @@
 <?php
 
+require_once __DIR__ . '/../../common/functions.php';   // include common functions file
+
 $connection = false;
 
-db_connect($hostname, $dbuser, $dbpass, $database);
+// PHP7
+//db_connect($hostname, $dbuser, $dbpass, $database);
+$dbh = pdo_connect();
 
 // catch parameters
 if (isset($_GET['dataset']) && !empty($_GET['dataset'])) {
     $dataset = urldecode($_GET['dataset']);
 } else {
     $sql = "SELECT querybin FROM tcat_query_bins ORDER BY id LIMIT 1";
-    $rec = mysql_query($sql);
-    if ($res = mysql_fetch_assoc($rec)) {
+    if ($res = pdo_fastquery($sql, $dbh)) {
         $dataset = $res['querybin'];
     }
 }
@@ -27,6 +30,10 @@ if (isset($_GET['url_query']) && !empty($_GET['url_query']))
     $url_query = urldecode($_GET['url_query']);
 else
     $url_query = "";
+if (isset($_GET['media_url_query']) && !empty($_GET['media_url_query']))
+    $media_url_query = urldecode($_GET['media_url_query']);
+else
+    $media_url_query = "";
 if (isset($_GET['geo_query']) && !empty($_GET['geo_query'])) {
     $geo_query = urldecode($_GET['geo_query']);
     if (preg_match("/[^\-\,\.0-9 ]/", $geo_query)) {
@@ -47,6 +54,10 @@ if (isset($_GET['from_user_name']) && !empty($_GET['from_user_name']))
     $from_user_name = urldecode($_GET['from_user_name']);
 else
     $from_user_name = "";
+if (isset($_GET['exclude_from_user_name']) && !empty($_GET['exclude_from_user_name']))
+    $exclude_from_user_name = urldecode($_GET['exclude_from_user_name']);
+else
+    $exclude_from_user_name = "";
 if (isset($_GET['from_user_description']) && !empty($_GET['from_user_description']))
     $from_user_description = urldecode($_GET['from_user_description']);
 else
@@ -82,9 +93,14 @@ else
     $keywordToTrack = "";
 
 if (isset($_GET['from_user_lang']) && !empty($_GET['from_user_lang']))
-    $from_user_lang = trim(strtolower($_GET['from_user_lang']));
+    $from_user_lang = trim($_GET['from_user_lang']);
 else
     $from_user_lang = "";
+
+if (isset($_GET['lang']) && !empty($_GET['lang']))
+    $lang = trim($_GET['lang']);
+else
+    $lang = "";
 
 if (isset($_GET['minimumCowordFrequencyOverall']))
     $minimumCowordFrequencyOverall = $_GET['minimumCowordFrequencyOverall'];
@@ -145,7 +161,7 @@ $esc = array();
 $punctuation = array("\s", "\.", ",", "!", "\?", ":", ";", "\/", "\\", "#", "@", "&", "\^", "\$", "\|", "`", "~", "=", "\+", "\*", "\"", "'", "\(", "\)", "\]", "\[", "\{", "\}", "<", ">", "�");
 
 // define the type of output
-$tsv = array("hashtag", "mention", "retweet", "urls", "hosts", "user", "user-mention"); // these analyses will output tsv files
+$tsv = array("hashtag", "mention", "retweet", "urls", "hosts", "user", "user-mention", "source"); // these analyses will output tsv files
 $network = array("coword", "interaction");   // these analyses will output network files
 
 $titles = array(
@@ -154,7 +170,8 @@ $titles = array(
     "user" => "User frequency",
     "mention" => "Mention (@username) frequency",
     "urls" => "URL frequency",
-    "hosts" => "host frequency"
+    "hosts" => "host frequency",
+    "source" => "source frequency"
 );
 
 
@@ -188,6 +205,8 @@ function get_file($what) {
 
 function frequencyTable($table, $toget) {
     global $esc, $intervalDates;
+    $dbh = pdo_connect();
+    pdo_unbuffered($dbh);
     $results = array();
     $sql = "SELECT COUNT($table.$toget) AS count, $table.$toget AS toget, ";
     $sql .= sqlInterval();
@@ -195,9 +214,10 @@ function frequencyTable($table, $toget) {
     $where = "t.id = $table.tweet_id AND ";
     $sql .= sqlSubset($where);
     $sql .= " GROUP BY toget, datepart ORDER BY datepart ASC, count DESC";
-    $rec = mysql_unbuffered_query($sql);
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
     $date = false;
-    while ($res = mysql_fetch_assoc($rec)) {
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
         if ($res['count'] > $esc['shell']['minf']) {
             if (!empty($intervalDates))
                 $date = groupByInterval($res['datepart']);
@@ -208,7 +228,7 @@ function frequencyTable($table, $toget) {
             $results[$date][$res['toget']] = $res['count'];
         }
     }
-    mysql_free_result($rec);
+    $dbh = null;
     return $results;
 }
 
@@ -219,7 +239,9 @@ function sqlSubset($where = NULL) {
     $collation = current_collation();
     $sql = "";
     if (!empty($esc['mysql']['url_query']) && strstr($where, "u.") == false)
-        $sql .= ", " . $esc['mysql']['dataset'] . "_urls u";
+        $sql .= " INNER JOIN " . $esc['mysql']['dataset'] . "_urls u ON u.tweet_id = t.id ";
+    if (!empty($esc['mysql']['media_url_query']) && strstr($where, "med.") == false)
+        $sql .= " INNER JOIN " . $esc['mysql']['dataset'] . "_media med ON med.tweet_id = t.id ";
     $sql .= " WHERE ";
     if (!empty($where))
         $sql .= $where;
@@ -238,6 +260,23 @@ function sqlSubset($where = NULL) {
             $sql = substr($sql, 0, -3) . ") AND ";
         } else {
             $sql .= "LOWER(t.from_user_name COLLATE $collation) = LOWER('" . $esc['mysql']['from_user_name'] . "' COLLATE $collation) AND ";
+        }
+    }
+    if (!empty($esc['mysql']['exclude_from_user_name'])) {
+        if (strstr($esc['mysql']['exclude_from_user_name'], "AND") !== false) {
+            $subqueries = explode(" AND ", $esc['mysql']['exclude_from_user_name']);
+            foreach ($subqueries as $subquery) {
+                $sql .= "LOWER(t.from_user_name COLLATE $collation) NOT LIKE LOWER('%" . $subquery . "%' COLLATE $collation) AND ";
+            }
+        } elseif (strstr($esc['mysql']['exclude_from_user_name'], "OR") !== false) {
+            $subqueries = explode(" OR ", $esc['mysql']['exclude_from_user_name']);
+            $sql .= "(";
+            foreach ($subqueries as $subquery) {
+                $sql .= "LOWER(t.from_user_name COLLATE $collation) NOT LIKE LOWER('%" . $subquery . "%' COLLATE $collation) OR ";
+            }
+            $sql = substr($sql, 0, -3) . ") AND ";
+        } else {
+            $sql .= "LOWER(t.from_user_name COLLATE $collation) NOT LIKE LOWER('%" . $esc['mysql']['exclude_from_user_name'] . "%' COLLATE $collation) AND ";
         }
     }
     if (!empty($esc['mysql']['from_user_description'])) {
@@ -275,8 +314,6 @@ function sqlSubset($where = NULL) {
         }
     }
     if (!empty($esc['mysql']['url_query'])) {
-        if (strstr($where, "u.") == false)
-            $sql .= " u.tweet_id = t.id AND ";
         if (strstr($esc['mysql']['url_query'], "AND") !== false) {
             $subqueries = explode(" AND ", $esc['mysql']['url_query']);
             foreach ($subqueries as $subquery) {
@@ -305,6 +342,38 @@ function sqlSubset($where = NULL) {
             $sql .= ") AND ";
         }
     }
+    if (!empty($esc['mysql']['media_url_query'])) {
+        if (strstr($esc['mysql']['media_url_query'], "AND") !== false) {
+            $subqueries = explode(" AND ", $esc['mysql']['media_url_query']);
+            foreach ($subqueries as $subquery) {
+                $sql .= "(";
+                $sql .= "(LOWER(med.url COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation)) OR ";
+                $sql .= "(LOWER(med.media_url_https COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation)) OR ";
+                $sql .= "(LOWER(med.url_expanded COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation))";
+                $sql .= ")";
+                $sql .= " AND ";
+            }
+        } elseif (strstr($esc['mysql']['media_url_query'], "OR") !== false) {
+            $subqueries = explode(" OR ", $esc['mysql']['media_url_query']);
+            $sql .= "(";
+            foreach ($subqueries as $subquery) {
+                $sql .= "(";
+                $sql .= "(LOWER(med.url COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation)) OR ";
+                $sql .= "(LOWER(med.media_url_https COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation)) OR ";
+                $sql .= "(LOWER(med.url_expanded COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation))";
+                $sql .= ")";
+                $sql .= " OR ";
+            }
+            $sql = substr($sql, 0, -3) . ") AND ";
+        } else {
+            $subquery = $esc['mysql']['media_url_query'];
+            $sql .= "(";
+            $sql .= "(LOWER(med.url COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation)) OR ";
+            $sql .= "(LOWER(med.media_url_https COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation)) OR ";
+            $sql .= "(LOWER(med.url_expanded COLLATE $collation) LIKE LOWER('%" . $subquery . "%' COLLATE $collation))";
+            $sql .= ") AND ";
+        }
+    }
     if (!empty($esc['mysql']['geo_query']) && dbserver_has_geo_functions()) {
 
         $polygon = "POLYGON((" . $esc['mysql']['geo_query'] . "))";
@@ -318,7 +387,7 @@ function sqlSubset($where = NULL) {
     }
 
     if (!empty($esc['mysql']['from_source'])) {
-	if (strstr($esc['mysql']['from_source'], "OR") !== false) {
+        if (strstr($esc['mysql']['from_source'], "OR") !== false) {
             $subqueries = explode(" OR ", $esc['mysql']['from_source']);
             $sql .= "(";
             foreach ($subqueries as $subquery) {
@@ -363,6 +432,26 @@ function sqlSubset($where = NULL) {
             $sql .= "from_user_lang = '" . $esc['mysql']['from_user_lang'] . "' AND ";
         }
     }
+    if (!empty($esc['mysql']['lang'])) {
+        if (strstr($esc['mysql']['lang'], "AND") !== false) {
+            $subqueries = explode(" AND ", $esc['mysql']['lang']);
+            foreach ($subqueries as $subquery) {
+                $sql .= "lang = '" . $subquery . "' AND ";
+            }
+        } elseif (strstr($esc['mysql']['lang'], "OR") !== false) {
+            $subqueries = explode(" OR ", $esc['mysql']['lang']);
+            $sql .= "(";
+            foreach ($subqueries as $subquery) {
+                $sql .= "lang = '" . $subquery . "' OR ";
+            }
+            $sql = substr($sql, 0, -3) . ") AND ";
+        } else {
+            $sql .= "lang = '" . $esc['mysql']['lang'] . "' AND ";
+        }
+    }
+
+
+
     $sql .= " t.created_at >= '" . $esc['datetime']['startdate'] . "' AND t.created_at <= '" . $esc['datetime']['enddate'] . "' ";
     //print $sql."<br>"; die;
 
@@ -374,23 +463,23 @@ function sqlInterval() {
     global $interval;
     switch ($interval) {
         case "minute":
-            return "DATE_FORMAT(t.created_at,'%Y-%m-%d %Hh %im') datepart ";
-            break;
+            return "DATE_FORMAT(t.created_at,'%Y-%m-%d %H:%i') datepart ";
+            break; 
         case "hourly":
-            return "DATE_FORMAT(t.created_at,'%Y-%m-%d %Hh') datepart ";
-            break;
+            return "DATE_FORMAT(t.created_at,'%Y-%m-%d %H') datepart ";
+            break; 
         case "weekly":
             return "DATE_FORMAT(t.created_at,'%Y %u') datepart ";
-            break;
+            break; 
         case "monthly":
             return "DATE_FORMAT(t.created_at,'%Y-%m') datepart ";
-            break;
+            break; 
         case "yearly":
             return "DATE_FORMAT(t.created_at,'%Y') datepart ";
-            break;
+            break; 
         case "overall":
             return "DATE_FORMAT(t.created_at,'overall') datepart ";
-            break;
+            break; 
         default:
             return "DATE_FORMAT(t.created_at,'%Y-%m-%d') datepart "; // default daily (also used for custom)
     }
@@ -416,6 +505,7 @@ function groupByInterval($date) {
 // generates the datafiles, only used if the file does not exist yet
 function generate($what, $filename) {
     global $tsv, $network, $esc, $titles, $database, $interval, $outputformat;
+    $dbh = pdo_connect();
 
     require_once __DIR__ . '/CSV.class.php';
 
@@ -428,8 +518,9 @@ function generate($what, $filename) {
     $sql = "SELECT MIN(t.created_at) AS min, MAX(t.created_at) AS max FROM " . $esc['mysql']['dataset'] . "_tweets t ";
     $sql .= sqlSubset();
     //print $sql . "<bR>";
-    $rec = mysql_query($sql);
-    $res = mysql_fetch_assoc($rec);
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+    $res = $rec->fetch(PDO::FETCH_ASSOC);
 
     // get frequencies
     if ($what == "hashtag") {
@@ -443,19 +534,18 @@ function generate($what, $filename) {
         // get other things
     } else {
         // @todo, this could also use database grouping
-        $sql = "SELECT id,text COLLATE $collation as text,created_at,from_user_name COLLATE $collation as from_user_name FROM " . $esc['mysql']['dataset'] . "_tweets t ";
+        $sql = "SELECT t.id,text COLLATE $collation as text,created_at,source, from_user_name COLLATE $collation as from_user_name FROM " . $esc['mysql']['dataset'] . "_tweets t ";
         $sql .= sqlSubset();
 
         // get slice and its min and max time
-        $rec = mysql_query($sql);
-
-        if ($rec && mysql_num_rows($rec) > 0) {
-            while ($res = mysql_fetch_assoc($rec)) {
-                $tweets[] = $res['text'];
-                $ids[] = $res['id'];
-                $times[] = $res['created_at'];
-                $from_user_names[] = strtolower($res['from_user_name']);
-            }
+        $rec = $dbh->prepare($sql);
+        $rec->execute();
+        while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+            $tweets[] = $res['text'];
+            $ids[] = $res['id'];
+            $times[] = $res['created_at'];
+            $from_user_names[] = strtolower($res['from_user_name']);
+            $sources[] = strtolower($res['source']);
         }
 
         // extract desired things ($what) and group per interval
@@ -501,7 +591,9 @@ function generate($what, $filename) {
                 case "user":
                     $results[$group][] = $from_user_names[$key];
                     break;
-
+                case "source":
+                    $results[$group][] = $sources[$key];
+                    break;
                 case "user-mention":
                     $stuff = get_replies($tweet);
                     foreach ($stuff as $thing) {
@@ -524,7 +616,7 @@ function generate($what, $filename) {
                 //    break;
                 default:
                     break;
-            }
+            } 
         }
         // count frequency of occurence of thing, per interval
         if ($what != "user-mention") {
@@ -625,6 +717,7 @@ function generate($what, $filename) {
 
 // does some cleanup of data types
 function validate($what, $how) {
+    global $dbh;
     $what = trim($what);
     switch ($how) {
         case "database":
@@ -669,10 +762,16 @@ function validate($what, $how) {
                 $what = escapeshellcmd($what);
             }
             break;
-        // escape non-mysql chars
-        case "mysql":
+        // escape non-mysql chars where we must use literal string in SQL queries (for example: table names cannot become placeholders in PDO)
+        case "mysql-literal":
             $what = preg_replace("/[\[\]]/", "", $what);
-            $what = mysql_real_escape_string($what);
+            $quoted = $dbh->quote($what);
+            $what = mb_substr(mb_substr($quoted, 1), 0, -1);
+            break;
+        // the mysql-placeholder type means the variable will not be used literally in a SQL query, but passed through a placeholder
+        // TODO: turn as much user-passed variables as possible into the mysql-placeholder type, but when we do, make sure to commit everything in a single go
+        case "mysql-placeholder":
+            $what = preg_replace("/[\[\]]/", "", $what);
             break;
         case "frequency":
             $what = preg_replace("/[^\d]/", "", $what);
@@ -698,27 +797,33 @@ function decodeAndFlatten($text) {
 // make sure that we have all the right types and values
 // also make sure one cannot do a mysql injection attack
 function validate_all_variables() {
-    global $esc, $query, $url_query, $geo_query, $dataset, $exclude, $from_user_name, $from_user_description, $from_source, $startdate, $enddate, $interval, $databases, $connection, $keywords, $database, $minf, $topu, $from_user_lang, $outputformat;
+    global $esc, $query, $url_query, $media_url_query, $geo_query, $dataset, $exclude, $from_user_name, $exclude_from_user_name, $from_user_description, $from_source, $startdate, $enddate, $interval, $databases, $connection, $keywords, $database, $minf, $topu, $from_user_lang, $lang, $outputformat;
 
-    $esc['mysql']['dataset'] = validate($dataset, "mysql");
-    $esc['mysql']['query'] = validate($query, "mysql");
-    $esc['mysql']['url_query'] = validate($url_query, "mysql");
-    $esc['mysql']['geo_query'] = validate($geo_query, "mysql");
-    $esc['mysql']['exclude'] = validate($exclude, "mysql");
-    $esc['mysql']['from_source'] = validate($from_source, "mysql");
-    $esc['mysql']['from_user_name'] = validate($from_user_name, "mysql");
-    $esc['mysql']['from_user_description'] = validate($from_user_description, "mysql");
-    $esc['mysql']['from_user_lang'] = validate($from_user_lang, "mysql");
+    $esc['mysql']['dataset'] = validate($dataset, "mysql-literal");
+    $esc['mysql']['query'] = validate($query, "mysql-literal");
+    $esc['mysql']['url_query'] = validate($url_query, "mysql-literal");
+    $esc['mysql']['media_url_query'] = validate($media_url_query, "mysql-literal");
+    $esc['mysql']['geo_query'] = validate($geo_query, "mysql-literal");
+    $esc['mysql']['exclude'] = validate($exclude, "mysql-literal");
+    $esc['mysql']['from_source'] = validate($from_source, "mysql-literal");
+    $esc['mysql']['from_user_name'] = validate($from_user_name, "mysql-literal");
+    $esc['mysql']['exclude_from_user_name'] = validate($exclude_from_user_name, "mysql-literal");
+    $esc['mysql']['from_user_description'] = validate($from_user_description, "mysql-literal");
+    $esc['mysql']['from_user_lang'] = validate($from_user_lang, "mysql-literal");
+    $esc['mysql']['lang'] = validate($lang, "mysql-literal");
 
     $esc['shell']['dataset'] = validate($dataset, "shell");
     $esc['shell']['query'] = validate($query, "shell");
     $esc['shell']['url_query'] = validate($url_query, "shell");
+    $esc['shell']['media_url_query'] = validate($media_url_query, "shell");
     $esc['shell']['geo_query'] = validate($geo_query, "shell");
     $esc['shell']['exclude'] = validate($exclude, "shell");
     $esc['shell']['from_source'] = validate($from_source, "shell");
     $esc['shell']['from_user_name'] = validate($from_user_name, "shell");
+    $esc['shell']['exclude_from_user_name'] = validate($exclude_from_user_name, "shell");
     $esc['shell']['from_user_description'] = validate($from_user_description, "shell");
     $esc['shell']['from_user_lang'] = validate($from_user_lang, "shell");
+    $esc['shell']['lang'] = validate($lang, "shell");
     $esc['shell']['datasetname'] = validate($dataset, "shell");
 
     $esc['shell']['minf'] = validate($minf, 'frequency');
@@ -740,17 +845,27 @@ function validate_all_variables() {
         $esc['datetime']['enddate'] = $esc['date']['enddate'];
 }
 
-// This function reads the current collation by using the hashtags table as a reference
+/*
+ * This function reads the current collation by using the hashtags table as a reference
+ * It re-uses an established PDO connection if it is available, otherwise it will establish a one time
+ * connection, just to determine the collation of the selected bin.
+ */
 function current_collation() {
     global $esc;
+    global $dbh;
+    // Is the PDO connection active?
+    $re_use = false;
+    if (isset($dbh) && $dbh instanceof PDO) {
+        $re_use = true;
+    } else {
+        $dbh = pdo_connect();
+    }
     $collation = 'utf8_bin';
     $is_utf8mb4 = false;
     $sql = "SHOW FULL COLUMNS FROM " . $esc['mysql']['dataset'] . "_hashtags";
-	global $hostname, $dbuser, $dbpass, $database;
-	db_connect($hostname, $dbuser, $dbpass, $database);
-
-    $sqlresults = mysql_query($sql);
-    while ($res = mysql_fetch_assoc($sqlresults)) {
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
         if (array_key_exists('Collation', $res) && ($res['Collation'] == 'utf8mb4_unicode_ci' || $res['Collation'] == 'utf8mb4_general_ci')) {
             $is_utf8mb4 = true;
             break;
@@ -761,28 +876,34 @@ function current_collation() {
     if ($is_utf8mb4 == false) {
         // When the table has columns with collation of utf8 (as opposed to utf8mb4)
         // fall back the current connection character set to utf8 as well, otherwise queries with 'COLLATE utf8_bin' will fail.
-        mysql_query("SET NAMES utf8");
+        $dbh->exec("SET NAMES utf8");
+    }
+    if ($re_use == false) {
+	$dbh = false;
     }
     return $collation;
 }
 
 // This function accesses the tcat_status table (if it exists) and retrieves the value for a variable
 function get_status($variable) {
-	global $esc, $hostname, $dbuser, $dbpass, $database;
+    global $database;
+    $dbh = pdo_connect();
     $sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = '$database' AND table_name = 'tcat_status'";
-	db_connect($hostname, $dbuser, $dbpass, $database);
-    $sqlresults = mysql_query($sql);
-    if (mysql_num_rows($sqlresults) > 0) {
-        $sql = "SELECT value FROM tcat_status WHERE variable = '" . mysql_real_escape_string($variable) . "'";
-        $sqlresults = mysql_query($sql);
-        if ($res = mysql_fetch_assoc($sqlresults)) {
+    if ($sqlresults = pdo_fastquery($sql, $dbh)) {
+        $sql = "SELECT value FROM tcat_status WHERE variable = :variable";
+        $rec = $dbh->prepare($sql);
+        $rec->bindParam(':variable', $variable, PDO::PARAM_STR);
+        $rec->execute();
+        if ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+            $dbh = null;
             return $res['value'];
         }
     }
+    $dbh = null;
     return null;
 }
 
-// Output format: {dataset}-{startdate}-{enddate}-{query}-{exclude}-{from_user_name}-{from_user_description}-{from_user_lang}-{url_query}-{module_name}-{module_settings}-{hash}.{filetype}
+// Output format: {dataset}-{startdate}-{enddate}-{query}-{exclude}-{from_user_name}-{exclude_from_user_name}-{from_user_description}-{from_user_lang}-{lang}-{url_query}-{media_url_query}--{module_name}-{module_settings}-{hash}.{filetype}
 function get_filename_for_export($module, $settings = "", $filetype = "csv") {
     global $resultsdir, $esc;
 
@@ -802,10 +923,13 @@ function get_filename_for_export($module, $settings = "", $filetype = "csv") {
     $filename .= "-" . stripslashes($esc['shell']["query"]);
     $filename .= "-" . $esc['shell']["exclude"];
     $filename .= "-" . $esc['shell']["from_source"];
-    $filename .= "-" . $esc['shell']["from_user_name"];
+    $filename .= "-" . substr($esc['shell']["from_user_name"],0,20);
+    $filename .= "-" . substr($esc['shell']["exclude_from_user_name"],0,20);
     $filename .= "-" . $esc['shell']["from_user_description"];
     $filename .= "-" . $esc['shell']["from_user_lang"];
+    $filename .= "-" . $esc['shell']["lang"];
     $filename .= "-" . $esc['shell']["url_query"];
+    $filename .= "-" . $esc['shell']["media_url_query"];
     $filename .= "-" . str_replace(",", "_", str_replace(" ", "x", $esc['shell']["geo_query"]));
     $filename .= "-" . $module;
     $filename .= "-" . $settings;
@@ -854,42 +978,56 @@ function get_all_datasets() {
     $rec = $dbh->prepare("SELECT id, querybin, type, active, comments FROM tcat_query_bins WHERE access = " . TCAT_QUERYBIN_ACCESS_OK . " OR access = " . TCAT_QUERYBIN_ACCESS_READONLY . " ORDER BY LOWER(querybin)");
     $datasets = array();
     try {
-    if ($rec->execute() && $rec->rowCount() > 0) {
-        while ($res = $rec->fetch()) {
-            $row = array();
-            $row['bin'] = $res['querybin'];
-            $row['type'] = $res['type'];
-            $row['active'] = $res['active'];
-            $row['comments'] = $res['comments'];
-            $rec2 = $dbh->prepare("SELECT count(t.id) AS notweets, MAX(t.created_at) AS max  FROM " . $res['querybin'] . "_tweets t ");
-            if ($rec2->execute() && $rec2->rowCount() > 0) {
-                $res2 = $rec2->fetch();
-                $row['notweets'] = $res2['notweets'];
-                $row['maxtime'] = $res2['max'];
-            }
-            $rec3 = $dbh->prepare("SELECT starttime AS min FROM tcat_query_bins b, tcat_query_bins_periods bp WHERE b.querybin = '" . $res['querybin'] . "' AND b.id = bp.querybin_id");
-            if ($rec3->execute() && $rec3->rowCount() > 0) {
-                $res3 = $rec3->fetch();
-                $row['mintime'] = $res3['min'];
-            }
-            $row['keywords'] = "";
-            if ($row['type'] == "track") {
-                $rec2 = $dbh->prepare("SELECT distinct(p.phrase) FROM tcat_query_bins_phrases bp, tcat_query_phrases p WHERE bp.querybin_id = " . $res['id'] . " AND bp.phrase_id = p.id ORDER BY LOWER(p.phrase)");
+        if ($rec->execute() && $rec->rowCount() > 0) {
+            while ($res = $rec->fetch()) {
+                $row = array();
+                $row['bin'] = $res['querybin'];
+                $row['type'] = $res['type'];
+                $row['active'] = $res['active'];
+                $row['comments'] = $res['comments'];
+                $rec2 = $dbh->prepare("SELECT count(t.id) AS notweets, MAX(t.created_at) AS max  FROM " . $res['querybin'] . "_tweets t ");
                 if ($rec2->execute() && $rec2->rowCount() > 0) {
-                    $res2 = $rec2->fetchAll(PDO::FETCH_COLUMN);
-                    $row['keywords'] = implode(", ", $res2);
+                    $res2 = $rec2->fetch();
+                    $row['notweets'] = $res2['notweets'];
+                    $row['maxtime'] = $res2['max'];
+                }
+                $rec3 = $dbh->prepare("SELECT count(h.id) AS nohashtags FROM " . $res['querybin'] . "_hashtags h ");
+                if ($rec3->execute() && $rec3->rowCount() > 0) {
+                    $res3 = $rec3->fetch();
+                    $row['nohashtags'] = $res3['nohashtags'];
+                }
+                $rec3 = $dbh->prepare("SELECT count(u.id) AS nourls FROM " . $res['querybin'] . "_urls u ");
+                if ($rec3->execute() && $rec3->rowCount() > 0) {
+                    $res3 = $rec3->fetch();
+                    $row['nourls'] = $res3['nourls'];
+                }
+                $rec3 = $dbh->prepare("SELECT count(m.id) AS nomentions FROM " . $res['querybin'] . "_mentions m ");
+                if ($rec3->execute() && $rec3->rowCount() > 0) {
+                    $res3 = $rec3->fetch();
+                    $row['nomentions'] = $res3['nomentions'];
+                }
+                $rec3 = $dbh->prepare("SELECT starttime AS min FROM tcat_query_bins b, tcat_query_bins_periods bp WHERE b.querybin = '" . $res['querybin'] . "' AND b.id = bp.querybin_id");
+                if ($rec3->execute() && $rec3->rowCount() > 0) {
+                    $res3 = $rec3->fetch();
+                    $row['mintime'] = $res3['min'];
+                }
+                $row['keywords'] = "";
+                if ($row['type'] == "track") {
+                    $rec2 = $dbh->prepare("SELECT distinct(p.phrase) FROM tcat_query_bins_phrases bp, tcat_query_phrases p WHERE bp.querybin_id = " . $res['id'] . " AND bp.phrase_id = p.id ORDER BY LOWER(p.phrase)");
+                    if ($rec2->execute() && $rec2->rowCount() > 0) {
+                        $res2 = $rec2->fetchAll(PDO::FETCH_COLUMN);
+                        $row['keywords'] = implode(", ", $res2);
+                    }
                 } elseif (in_array($row['type'], array("follow", "timeline"))) {
-                    $rec2 = $dbh->prepare("SELECT distinct(t.from_user_name) FROM tcat_query_bins_users bu, " . $res['querybin'] . "_tweets t WHERE bu.querybin_id = " . $res['id'] . " AND bu.user_id = t.from_user_id ORDER BY LOWER(t.from_user_name)");
+                    $rec2 = $dbh->prepare("SELECT u.user_name FROM tcat_query_users u, tcat_query_bins_users bu WHERE bu.querybin_id = " . $res['id'] . " AND bu.user_id = u.id AND u.user_name is not null");
                     if ($rec2->execute() && $rec2->rowCount() > 0) {
                         $res2 = $rec2->fetchAll(PDO::FETCH_COLUMN);
                         $row['keywords'] = implode(", ", $res2);
                     }
                 }
+                $datasets[$row['bin']] = $row;
             }
-            $datasets[$row['bin']] = $row;
         }
-    }
-
     } catch (PDOException $e) {
         if ($e->errorInfo[0] == '42S02') {
             // Base table or view not found
@@ -903,17 +1041,18 @@ function get_all_datasets() {
 }
 
 function get_total_nr_of_tweets() {
+    $dbh = pdo_connect();
     $select = "SHOW TABLES LIKE '%_tweets'";
-    $rec = mysql_query($select);
+    $rec = $dbh->prepare($select);
+    $rec->execute();
     $count = 0;
-    while ($res = mysql_fetch_row($rec)) {
-        $sql = "SELECT COUNT(id) FROM " . $res[0];
-        $rec2 = mysql_query($sql);
-        if ($rec2) {
-            $res2 = mysql_fetch_row($rec2);
-            $count += $res2[0];
+    while ($res = $rec->fetch(PDO::FETCH_NUM)) {
+        $sql = "SELECT COUNT(id) as total FROM " . $res[0];
+        if ($res2 = pdo_fastquery($sql, $dbh)) {
+            $count += $res2['total'];
         }
     }
+    $dbh = null;
     return $count;
 }
 
@@ -935,8 +1074,9 @@ function db_connect($db_host, $db_user, $db_pass, $db_name) {
 }
 
 function dbserver_has_geo_functions() {
-    // the analysis frontend currently uses the mysql_* functions
-    $version = mysql_get_server_info();
+    $dbh = pdo_connect();
+    $version = $dbh->getAttribute(PDO::ATTR_SERVER_VERSION);
+    $dbh = null;
     if (preg_match("/([0-9]*)\.([0-9]*)\.([0-9]*)/", $version, $matches)) {
         $maj = $matches[1];
         $min = $matches[2];
@@ -948,13 +1088,43 @@ function dbserver_has_geo_functions() {
     return false;
 }
 
-function pdo_connect() {
-    global $dbuser, $dbpass, $database, $hostname;
+function pdo_error_report($Exception) {
+    error_log("Database access error occured. Code: " . $Exception->getCode() . " Msg: " . $Exception->getMessage());
+}
 
-    $dbh = new PDO("mysql:host=$hostname;dbname=$database;charset=utf8mb4", $dbuser, $dbpass, array(PDO::MYSQL_ATTR_INIT_COMMAND => "set sql_mode='ALLOW_INVALID_DATES'"));
-    $dbh->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+/*
+ * This function enables query buffering for an existing database connection (the default behaviour is: buffering)
+ */
 
-    return $dbh;
+function pdo_buffered($dbh) {
+    $dbh->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+}
+
+/*
+ * This function disables query buffering for an existing database connection (the default behaviour is: buffering)
+ */
+
+function pdo_unbuffered($dbh) {
+    $dbh->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+}
+
+function pdo_fastquery($query, $dbh = null) {
+    if (is_null($dbh)) {
+        $dbh = pdo_connect();
+        $no_connection = true;     /* establish a one-time connection for this query */
+    } else {
+        $no_connection = false;
+    }
+    try {
+        $rec = $dbh->prepare($query);
+        $rec->execute();
+        $results = $rec->fetch(PDO::FETCH_ASSOC);
+        if ($no_connection)
+            $dbh = null;
+        return $results;
+    } catch (PDOException $Exception) {
+        pdo_error_report($Exception);
+    }
 }
 
 // number median ( number arg1, number arg2 [, number ...] )
@@ -1209,15 +1379,15 @@ function sentiment_avgs() {
 // If it does not exist, an error page is produced and execution stops.
 
 function dataset_must_exist() {
-  global $dataset;
-  global $datasets;
+    global $dataset;
+    global $datasets;
 
-  if (! isset($datasets[$dataset])) {
-    http_response_code(404);
-    header("Content-Type: text/plain");
-    echo "Error: unknown query bin: $dataset";
-    exit(0);
-  }
+    if (!isset($datasets[$dataset])) {
+        http_response_code(404);
+        header("Content-Type: text/plain");
+        echo "Error: unknown query bin: $dataset";
+        exit(0);
+    }
 }
 
 // Prepare for data export.
@@ -1251,30 +1421,30 @@ function export_start($filename, $outputformat) {
     $use_cache_file = DEFAULT_USE_CACHE_FILE;
 
     if (isset($_GET['cache'])) {
-    switch ($_GET['cache']) {
-        case 'n':
-            $use_cache_file = false;
-            break;
-	case 'y':
-	    $use_cache_file = true;
-	    break;
-	default:
-            die("Invalid query parameter: cache=" . $_GET['cache']);
-	}
+        switch ($_GET['cache']) {
+            case 'n':
+                $use_cache_file = false;
+                break;
+            case 'y':
+                $use_cache_file = true;
+                break;
+            default:
+                die("Invalid query parameter: cache=" . $_GET['cache']);
+        }
     }
 
     // Determine the MIME type
 
     switch ($outputformat) {
-    case 'csv':
-        $mimetype = 'text/csv; charset=utf-8';
-        break;
-    case 'tsv':
-        $mimetype = 'text/tab-separated-values; charset=utf-8';
-        break;
-    default:
-        $mimetype = 'application/octet-stream';
-        break;
+        case 'csv':
+            $mimetype = 'text/csv; charset=utf-8';
+            break;
+        case 'tsv':
+            $mimetype = 'text/tab-separated-values; charset=utf-8';
+            break;
+        default:
+            $mimetype = 'application/octet-stream';
+            break;
     }
 
     // Use cache file or return results as an attachment
@@ -1282,7 +1452,6 @@ function export_start($filename, $outputformat) {
     if ($use_cache_file) {
         // Write data to cache file
         return $filename;
-
     } else {
         // Write into HTTP response
         $suggest = 'tcat_' . basename($filename);
@@ -1295,6 +1464,6 @@ function export_start($filename, $outputformat) {
 
         return 'php://output';
     }
-}    
+}
 
 ?>

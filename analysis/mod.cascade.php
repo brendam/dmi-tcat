@@ -4,24 +4,27 @@ require_once __DIR__ . '/common/config.php';
 require_once __DIR__ . '/common/functions.php';
 
 validate_all_variables();
+dataset_must_exist();
+$dbh = pdo_connect();
+pdo_unbuffered($dbh);
 $collation = current_collation();
 
 $exc = (empty($esc['shell']["exclude"])) ? "" : "-" . $esc['shell']["exclude"];
 
-$select = "id, from_user_name COLLATE $collation as from_user_name, text COLLATE $collation as text, created_at, retweet_id";
+$select = "t.id, from_user_name COLLATE $collation as from_user_name, text COLLATE $collation as text, created_at, retweet_id";
 
 if (isset($_GET['minf'])&&!empty($_GET['minf'])) {
     if(!preg_match("/^\d+$/",$_GET['minf'])) die('minf not a number');
     $minf = $_GET['minf'];
-    $sql = "SELECT count(id) as cnt, from_user_name COLLATE $collation as from_user_name FROM " . $esc['mysql']['dataset'] . "_tweets t ";
+    $sql = "SELECT count(t.id) as cnt, from_user_name COLLATE $collation as from_user_name FROM " . $esc['mysql']['dataset'] . "_tweets t ";
     $sql .= sqlSubset();
     $sql .= " GROUP BY from_user_name COLLATE $collation"; 
-    $rec = mysql_unbuffered_query($sql);
-    while ($res = mysql_fetch_assoc($rec)) {
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
         if ($res['cnt'] >= $minf)
             $users[] = $res['from_user_name'];
     }
-    mysql_free_result($rec);
 
     $sql = "SELECT $select FROM " . $esc['mysql']['dataset'] . "_tweets t ";
     $sql .= sqlSubset();
@@ -32,14 +35,14 @@ if (isset($_GET['minf'])&&!empty($_GET['minf'])) {
     $sql .= sqlSubset();
 }
 
-$sqlresults = mysql_unbuffered_query($sql);
-
 $tabtweets = array();
 $tabusers = array();
 $tabids = array();
 $tabrts = array();
 
-while ($res = mysql_fetch_assoc($sqlresults)) {
+$rec = $dbh->prepare($sql);
+$rec->execute();
+while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
 
 	//print_r($res);
 
@@ -59,8 +62,6 @@ while ($res = mysql_fetch_assoc($sqlresults)) {
     $tabtweets[] = $tabtmp;
     $tabids[] = $tabtmp["id"];
 }
-
-mysql_free_result($sqlresults);
 
 //print_r($tabtweets);
 //exit;

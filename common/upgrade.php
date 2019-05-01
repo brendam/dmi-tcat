@@ -27,6 +27,8 @@ if (upg_env_is_cli()) {
     include_once __DIR__ . '/../common/constants.php';
     include __DIR__ . '/functions.php';
     include __DIR__ . '/../capture/common/functions.php';
+
+    require __DIR__ . '/../capture/common/tmhOAuth/tmhOAuth.php';
 }
 
 function get_all_bins() {
@@ -88,7 +90,20 @@ function upgrades($dry_run = false, $interactive = true, $aulevel = 2, $single =
     $all_bins = get_all_bins();
     $dbh = pdo_connect();
     $logtarget = $interactive ? "cli" : "controller.log";
-    
+
+    if ($dry_run) {
+        /*
+         * NOTICE (work in progress): due to several costly checks, we cannot perform live checks all the way back to 2014
+         *
+         * The last upgrade step was added April 2018. Currently, no notices will be displayed to users for installation which have
+         * not upgraded/performed the ancient steps [which is perfectly possible, because some upgrade steps may take too much time
+         * on multi-million tweet datasets]. Upgrading using the command-line still works, however.
+         *
+         * See issue #347 (TODO)
+         */
+        return array( 'suggested' => false, 'required' => false );
+    }
+
     // Tracker whether an update is suggested, or even required during a dry run.
     // These values are ONLY tracked when doing a dry run; do not use them for CLI feedback.
     $suggested = false; $required = false;
@@ -199,7 +214,7 @@ function upgrades($dry_run = false, $interactive = true, $aulevel = 2, $single =
                                 KEY `user_id` (`user_id`),
                                 KEY `tweet_id` (`user_id`),
                                 KEY `country` (`country`)
-                    ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+                    ) ENGINE=TokuDB COMPRESSION=TOKUDB_LZMA  DEFAULT CHARSET=utf8mb4";
             $create_withheld = $dbh->prepare($sql);
             $create_withheld->execute();
         }
@@ -226,7 +241,7 @@ function upgrades($dry_run = false, $interactive = true, $aulevel = 2, $single =
                     `id` varchar(32) NOT NULL,
                     `tweet_id` bigint(20) NOT NULL,
                         PRIMARY KEY (`id`, `tweet_id`)
-                    ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+                    ) ENGINE=TokuDB COMPRESSION=TOKUDB_LZMA  DEFAULT CHARSET=utf8mb4";
             $create_places = $dbh->prepare($sql);
             $create_places->execute();
         }
@@ -379,7 +394,7 @@ function upgrades($dry_run = false, $interactive = true, $aulevel = 2, $single =
                             KEY `photo_size_width` (`photo_size_width`),
                             KEY `photo_size_height` (`photo_size_height`),
                             KEY `photo_resize` (`photo_resize`)
-                    ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+                    ) ENGINE=TokuDB COMPRESSION=TOKUDB_LZMA  DEFAULT CHARSET=utf8mb4";
                 $rec = $dbh->prepare($query);
                 $rec->execute();
             }
@@ -804,7 +819,7 @@ function upgrades($dry_run = false, $interactive = true, $aulevel = 2, $single =
                          *
                          */
 
-                        $sql = "create temporary table if not exists tcat_error_ratelimit_upgrade ( id bigint, `type` varchar(32), start datetime not null, end datetime not null, tweets bigint not null, primary key(id, type), index(type), index(start), index(end) ) ENGINE=MyISAM";
+                        $sql = "create temporary table if not exists tcat_error_ratelimit_upgrade ( id bigint, `type` varchar(32), start datetime not null, end datetime not null, tweets bigint not null, primary key(id, type), index(type), index(start), index(end) ) ENGINE=TokuDB COMPRESSION=TOKUDB_LZMA";
                         $rec = $dbh->prepare($sql);
                         $rec->execute();
 
@@ -1430,6 +1445,343 @@ function upgrades($dry_run = false, $interactive = true, $aulevel = 2, $single =
 
     }
 
+    // 15/11/2017 Alter existing tweets tables to support 280 character tweets
+
+    $roles_reloaded_for_upgrade = false;
+    $query = "SHOW TABLES";
+    $rec = $dbh->prepare($query);
+    $rec->execute();
+    $results = $rec->fetchAll(PDO::FETCH_COLUMN);
+    $ans = '';
+    if ($interactive == false) {
+        // require auto-upgrade level 0
+        if ($aulevel >= 0) {
+            $ans = 'a';
+        } else {
+            $ans = 'SKIP';
+        }
+    }
+    if ($ans !== 'SKIP') {
+        foreach ($results as $k => $v) {
+            if (!preg_match("/_tweets$/", $v)) continue;
+            if ($single && $v !== $single . '_tweets') { continue; }
+            $query = "SHOW COLUMNS FROM $v";
+            $rec = $dbh->prepare($query);
+            $rec->execute();
+            $update = FALSE;
+            while ($res = $rec->fetch()) {
+                if ($res['Field'] == 'text' && $res['Type'] == 'varchar(255)') {
+                    $update = TRUE;
+                    break;
+                }
+            }
+            if ($dry_run) {
+                if ($update) {
+                    /* This update is suggested because it affects primary TCAT functionality */
+                    $suggested = TRUE;
+                    break;
+                }
+                continue;
+            }
+            if ($update) {
+
+                $querybin = preg_replace("/_tweets$/", "", $v);
+
+                $disk_space_mb = get_available_mysql_disk_space($logtarget);
+
+                $missing_support = FALSE;
+                if (!is_null($disk_space_mb)) {
+                    $sql = "SELECT COUNT(id) AS cnt FROM $v";
+                    $rec = $dbh->prepare($sql);
+                    $rec->execute();
+                    $results = $rec->fetch(PDO::FETCH_ASSOC);
+                    $count = $results['cnt'];
+                    if ($count == FAlSE) {
+                        /* The query bin is empty */
+                        $count = 0;
+                    }
+                    /* We require 2GB per million tweets for the upgrade to proceed (which is substantially more than the estimated real disk space costs) */
+                    if ($disk_space_mb < $count / 1000000 * 2048) {
+                        /* If not, we don't advocate the fallback method, because it too may require temporary disk space! */
+                        logit($logtarget, "WARNING: Insufficient disk space available to upgrade bin $querybin - cannot add 280 character support.");
+                    } else {
+                        if ($ans !== 'a') {
+                            $ans = cli_yesnoall("Alter text field to support 280 character tweets in table $v without table locks (may take time but is not blocking capture)", 0, '870d2b103b821421f52b87afca9e8a5dce7bdd6c');
+                        }
+                        if ($ans == 'a' || $ans == 'y') {
+                            $temporary_bin_name = 'tu_' . strtolower($querybin);
+                            $query = "SHOW TABLES LIKE '$temporary_bin_name'";
+                            $rec = $dbh->prepare($query);
+                            $rec->execute();
+                            $results = $rec->fetchAll(PDO::FETCH_COLUMN);
+                            if (count($results)) {
+                                logit($logtarget, "ERROR: The temporary processing table $temporary_bin_name already exists!");
+                                logit($logtarget, "ERROR: Have you interrupted this script during a previous run?");
+                                logit($logtarget, "ERROR: You will need to manually drop this table before you can proceed with upgrading this bin.");
+                            } else {
+                                /* All requirements have been met to upgrade the bin */
+                                if ($roles_reloaded_for_upgrade == false) {
+                                    /* We need the new codebase to work with this code */
+                                    logit($logtarget, "Reloading capture roles before we can proceed");
+                                    controller_restart_roles($logtarget, true);
+                                    $roles_reloaded_for_upgrade = true;
+                                }
+                                $queries = array(
+                                    "CREATE TABLE $temporary_bin_name LIKE $v",
+                                    "ALTER TABLE $temporary_bin_name MODIFY text TEXT",
+                                    "INSERT INTO $temporary_bin_name SELECT * FROM $v"
+                                );
+                                foreach ($queries as $sql) {
+                                    logit($logtarget, $sql);
+                                    $rec = $dbh->prepare($sql);
+                                    $rec->execute();
+                                }
+                                $sql = "SELECT MAX(id) AS max_tweet_id FROM $temporary_bin_name";
+                                logit($logtarget, $sql);
+                                $rec = $dbh->prepare($sql);
+                                $rec->execute();
+                                $results = $rec->fetch(PDO::FETCH_ASSOC);
+                                if ($results !== FALSE && array_key_exists('max_tweet_id', $results) && !is_null($results['max_tweet_id'])) {
+                                    $max_tweet_id = $results['max_tweet_id'];
+                                } else {
+                                    $max_tweet_id = 0;
+                                }
+                                logit($logtarget, "Logged maximum tweet id in bin as " . $max_tweet_id);
+                                /* Synchronize again, as the copy statement may have taken a long time */
+                                $sql = "INSERT INTO $temporary_bin_name SELECT * FROM $v WHERE id > $max_tweet_id";
+                                logit($logtarget, $sql);
+                                $rec = $dbh->prepare($sql);
+                                $rec->execute();
+                                /* Sanity check before table swap */
+                                $sql = "SELECT COUNT(id) AS sanity_count FROM $temporary_bin_name";
+                                logit($logtarget, $sql);
+                                $rec = $dbh->prepare($sql);
+                                $rec->execute();
+                                $abort = FALSE;
+                                if ($results = $rec->fetch(PDO::FETCH_ASSOC)) {
+                                    $sanity_count = $results['sanity_count'];
+                                    if ($sanity_count < $count) {
+                                       $abort = TRUE;
+                                    } else {
+                                       $sql = "DROP TABLE $v";
+                                       logit($logtarget, $sql);
+                                       $rec = $dbh->prepare($sql);
+                                       $rec->execute();
+                                       $sql = "RENAME TABLE $temporary_bin_name TO $v";
+                                       logit($logtarget, $sql);
+                                       $rec = $dbh->prepare($sql);
+                                       $rec->execute();
+                                    }
+                                } else {
+                                    $abort = TRUE;
+                                }
+                                if ($abort) {
+                                    logit($logtarget, "ERROR: Sanity check failed. Table reconstruction is incomplete. Original table remains untouched.");
+                                    logit($logtarget, "ERROR: Please drop table $temporary_bin_name and diagnose this issue manually before trying again.");
+                                }
+                            }
+
+                        }
+                    }
+                } else {
+                    $missing_support = TRUE;
+                }
+
+                if ($missing_support) {
+
+                    // Fallback procedure; simple, but will pause capture in bins
+
+                    logit($logtarget, "Warning: due to an unknown server configuration, we cannot detect the currently available MySQL disk space.");
+                    logit($logtarget, "Warning: we cannot alter your query bins without temporarily pausing them.");
+                    logit($logtarget, "Warning: the duration of those pauses per bin will be roughly 2 minutes + 1 minute per 830 thousand tweets on a fast machine.");
+
+                    if ($ans !== 'a') {
+                        $ans = cli_yesnoall("Alter text field to support 280 character tweets in table $v", 2, '870d2b103b821421f52b87afca9e8a5dce7bdd6c');
+                    }
+                    if ($ans == 'a' || $ans == 'y') {
+                        /* If the bin is currently active, we should pause it to prevent capture roles from hanging on inserts */
+                        $querybin = preg_replace("/_tweets$/", "", $v);
+                        $sql = "SELECT `active` FROM tcat_query_bins WHERE querybin = :querybin";
+                        $rec = $dbh->prepare($sql);
+                        $rec->bindParam(":querybin", $querybin, PDO::PARAM_STR);
+                        $rec->execute();
+                        $results = $rec->fetch(PDO::FETCH_ASSOC);
+                        $active = $results['active'];
+                        if ($active == '1') {
+                            logit($logtarget, "Querybin $querybin is currently active. Pausing bin and restarting track roles now");
+                            $sql = "UPDATE tcat_query_bins SET active = 0 WHERE querybin = :querybin";
+                            logit($logtarget, "$sql");
+                            $rec = $dbh->prepare($sql);
+                            $rec->bindParam(":querybin", $querybin, PDO::PARAM_STR);
+                            $rec->execute();
+                            controller_restart_roles($logtarget, true);
+                        }
+                        logit($logtarget, "Modifying text field from VARCHAR to TEXT in table $v");
+                        $query = "ALTER TABLE " . quoteIdent($v) . " MODIFY text TEXT";
+                        logit($logtarget, "$query");
+                        $rec = $dbh->prepare($query);
+                        $rec->execute();
+                        if ($active == '1') {
+                            logit($logtarget, "Resuming activity for querybin $querybin and restarting track roles");
+                            $sql = "UPDATE tcat_query_bins SET active = 1 WHERE querybin = :querybin";
+                            logit($logtarget, "$sql");
+                            $rec = $dbh->prepare($sql);
+                            $rec->bindParam(":querybin", $querybin, PDO::PARAM_STR);
+                            $rec->execute();
+                            controller_restart_roles($logtarget, true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 16/04/2018 Extract complete set of extended entities from full text of longer tweets
+
+    $query = "SELECT table_name FROM information_schema.tables WHERE table_schema = '$database' ORDER BY data_length";
+    $rec = $dbh->prepare($query);
+    $rec->execute();
+    $results = $rec->fetchAll(PDO::FETCH_COLUMN);
+    $ans = '';
+    if ($interactive == false) {
+        // require auto-upgrade level 2
+        if ($aulevel >= 1) {
+            $ans = 'a';
+        } else {
+            $ans = 'SKIP';
+        }
+    }
+    if ($ans !== 'SKIP') {
+        // Verify which (if any) bins we've already processed
+        $processed = array();
+        if ($have_tcat_status) {
+            $sql2 = "SELECT value FROM tcat_status WHERE variable = 'upgrade_entities'";
+            $rec2 = $dbh->prepare($sql2);
+            $rec2->execute();
+            $results2 = $rec2->fetch(PDO::FETCH_ASSOC);
+            if (is_array($results2)) {
+                $processed = json_decode($results2['value'], TRUE);
+            }
+        }
+        foreach ($results as $k => $v) {
+            if (!preg_match("/_tweets$/", $v)) continue;
+            if ($single && $v !== $single . '_tweets') {
+                continue;
+            }
+            $bin_name = preg_replace("/_tweets$/", "", $v);
+            if (in_array($bin_name, $processed)) { continue; }
+            $bin_type = getBinType($bin_name);
+            if ($bin_type !== "track" && $bin_type !== "geotrack" && $bin_type !== "follow" && $bin_type !== "onepercent" && $bin_type !== "other") {
+                // The timeline, search and lookup bin types are not affected
+                continue;
+            }
+            $update = FALSE;
+            $sql = "SELECT COUNT(*) AS cnt FROM $v";
+            $rec = $dbh->prepare($sql);
+            $rec->execute();
+            if ($res = $rec->fetch()) {
+                $count = $res['cnt'];
+                if ($count <= 1000000) {
+                    // NOTICE: this heuristic would fail in a theoretical scenario where a dataset would only contain @mentions or URLs
+                    // and no or near zero hashtags. In the query below, the 'ORDER BY created_at ASC' is critical, as we would otherwise
+                    // break on newly captured tweets which are correct as soon as TCAT is updated.
+                    $sql = "SELECT id, text FROM $v WHERE " .
+                            "                LENGTH(text) > 140 AND " .
+                            "                created_at >= '2017-11-01 00:00:00' AND " .
+                            "                LENGTH(text) - LENGTH(REPLACE(text, '#', '')) > 0 " .
+                            "                ORDER BY created_at ASC";
+                    $rec = $dbh->prepare($sql);
+                    $rec->execute();
+                    while ($res = $rec->fetch()) {
+                        $start_of_hashtag = mb_strrpos($res['text'], '#');
+                        if ($start_of_hashtag < 140) { continue; }
+                        $hashtag = '';
+                        for ($c = $start_of_hashtag + 1; $c < mb_strlen($res['text']); $c++) {
+                            $character = mb_substr($res['text'], $c, 1);
+                            if ($character == ' ') { break; }
+                            $hashtag .= $character;
+                        }
+                        if ($hashtag !== '') {
+                            $hashtag = mb_ereg_replace('\W','', $hashtag);     // Remove non-word characters
+                            $sql = "SELECT id FROM $bin_name" . "_hashtags WHERE tweet_id = :tweet_id AND text = :hashtag";
+                            $rec2 = $dbh->prepare($sql);
+                            $rec2->bindParam(":tweet_id", $res['id'], PDO::PARAM_STR);
+                            $rec2->bindParam(":hashtag", $hashtag, PDO::PARAM_STR);
+                            $rec2->execute();
+                            if ($rec2->rowCount() > 0) {
+                                // The hashtag was properly recovered. This bin seems to be okay!
+                                if (!$dry_run) {
+                                    logit($logtarget, "Could not find extended entity issues with bin $bin_name. It appears to be okay. Evidence is hashtag '$hashtag' in tweet id " . $res['id']);
+                                }
+                                break;
+                            } else {
+                                // We need to somehow allow more than one failure, probably.
+                                if (!$dry_run) {
+                                    logit($logtarget, "Bin $bin_name may need updating in relation to extended entities. Our evidence is tweet id " . $res['id'] . " with missing hashtag '" . $hashtag . "'");
+                                }
+                                $update = TRUE;
+                                break;
+                            }
+                        }
+                    }
+                    if ($update) {
+                        if ($dry_run) {
+                            $required = TRUE;
+                        } else {
+                            if ($ans !== 'a') {
+                                $ans = cli_yesnoall("Extract complete set of extended entities from full text of longer tweets for bin $bin_name", 1, "93e8f653a134c1f5bdd8a44f987818b0bfa4fd10");
+                            }
+                            if ($ans == 'a' || $ans == 'y') {
+                                logit($logtarget, "Starting work on $bin_name");
+                                disable_keys_for_bin($bin_name);
+                                logit($logtarget, "Preparing list of candidate tweets");
+                                $dbh = null; $dbh = pdo_connect();
+                                $sql = "SELECT id, text FROM $v WHERE " .
+                                    "                        LENGTH(text) > 140 AND " .
+                                    "                        created_at >= '2017-11-01 00:00:00' AND " .
+                                    "                        ( LENGTH(text) - LENGTH(REPLACE(text, '#', '')) > 0 OR " .
+                                    "                          LENGTH(text) - LENGTH(REPLACE(text, '@', '')) > 0 OR " .
+                                    "                          text LIKE '%http%' )";
+                                $rec = $dbh->prepare($sql);
+                                $rec->execute();
+                                $schedule = array();
+                                while ($res = $rec->fetch()) {
+                                    $tweet_id = $res['id'];
+                                    $text = $res['text'];
+                                    if (mb_strrpos($text, '#') >= 120 ||
+                                        mb_strrpos($text, '@') >= 120 ||
+                                        mb_strrpos($text, 'http') >= 120) {
+                                        $schedule[] = $tweet_id;
+                                        if (count($schedule) == 3000) {
+                                            upgrade_perform_lookups($bin_name, $schedule);
+                                            $schedule = array();
+                                        }
+                                    }
+                                }
+                                if (count($schedule) > 0) {
+                                    upgrade_perform_lookups($bin_name, $schedule);
+                                }
+                                $processed[] = $bin_name;
+                                // Update tcat_status
+                                $dbh = null; $dbh = pdo_connect();
+                                $sql = "DELETE FROM tcat_status WHERE variable = 'upgrade_entities'";
+                                $rec = $dbh->prepare($sql);
+                                $rec->execute();
+                                $sql = "INSERT INTO tcat_status ( variable, value ) VALUES ( 'upgrade_entities', :value )";
+                                $json = json_encode($processed);
+                                $rec = $dbh->prepare($sql);
+                                $rec->bindParam(":value", $json, PDO::PARAM_STR);
+                                $rec->execute();
+                                enable_keys_for_bin($bin_name);
+                            }
+                        }
+                    }
+                } else {
+                    // Cannot investigate bin due to size
+                }
+            }
+        }
+    }
 
     // End of upgrades
 
@@ -1491,15 +1843,192 @@ if (env_is_cli()) {
 
     upgrades(false, $interactive, $aulevel, $single);
 
+    controller_restart_roles($logtarget);
+
+}
+
+/*
+ * This function disables indexes for a specific bin. This is useful when you will be performing many updates.
+ * After your update step, use the enable_keys_for_bin() to start using the indexes again.
+ */
+function disable_keys_for_bin($bin_name) {
+    global $logtarget;
     $dbh = pdo_connect();
-    $roles = unserialize(CAPTUREROLES);
-    foreach ($roles as $role) {
-        logit($logtarget, "Restarting active capture role: $role");
-        $query = "INSERT INTO tcat_controller_tasklist ( task, instruction ) values ( '$role', 'reload' )";
-        $rec = $dbh->prepare($query);
-        $rec->execute();
+    logit($logtarget, "Disabling keys for bin $bin_name");
+    $query = "SHOW TABLES";
+    $rec = $dbh->prepare($query);
+    $rec->execute();
+    $results = $rec->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($results as $k => $v) {
+        $exts = array ( 'tweets', 'hashtags', 'mentions', 'urls', 'media', 'places', 'withheld' );
+        foreach ($exts as $ext) {
+            $search = $bin_name . '_' . $ext;
+            if ($v == $search) {
+                $query = "ALTER TABLE $v DISABLE KEYS";
+                $rec = $dbh->prepare($query);
+                $rec->execute();
+            }
+        }
+    }
+}
+
+/*
+ * This function enables indexes for a specific bin. After enabling the indexes, am OPTIMIZE TABLE
+ * is performed. This step will interrupt capture.
+ */
+function enable_keys_for_bin($bin_name) {
+    global $logtarget;
+    $dbh = pdo_connect();
+    logit($logtarget, "Enabling keys for bin $bin_name");
+    $query = "SHOW TABLES";
+    $rec = $dbh->prepare($query);
+    $rec->execute();
+    $results = $rec->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($results as $k => $v) {
+        $exts = array ( 'tweets', 'hashtags', 'mentions', 'urls', 'media', 'places', 'withheld' );
+        foreach ($exts as $ext) {
+            $search = $bin_name . '_' . $ext;
+            if ($v == $search) {
+                $query = "ALTER TABLE $v ENABLE KEYS";
+                $rec = $dbh->prepare($query);
+                $rec->execute();
+                $query = "OPTIMIZE TABLE $v";
+                $rec = $dbh->prepare($query);
+                $rec->execute();
+            }
+        }
+    }
+}
+
+function upgrade_perform_lookups($bin_name, $ids) {
+    global $logtarget, $twitter_keys, $current_key;
+
+    logit($logtarget, "performing lookup for " . count($ids) . " tweets");
+
+    $keyinfo = getRESTKey(0);
+    $current_key = $keyinfo['key'];
+    $ratefree = $keyinfo['remaining'];
+
+    $retries = 0;
+
+    $tweetQueue = new TweetQueue();
+
+    $tmhOAuth = new tmhOAuth(array(
+        'consumer_key' => $twitter_keys[$current_key]['twitter_consumer_key'],
+        'consumer_secret' => $twitter_keys[$current_key]['twitter_consumer_secret'],
+        'token' => $twitter_keys[$current_key]['twitter_user_token'],
+        'secret' => $twitter_keys[$current_key]['twitter_user_secret'],
+    ));
+
+    for ($i = 0; $i < count($ids); $i += 100) {
+
+        $lookups = 0;
+
+        logit($logtarget, "current key $current_key ratefree $ratefree");
+
+        while ($ratefree <= 0) {
+            $keyinfo = getRESTKey($current_key);
+            $current_key = $keyinfo['key'];
+            $ratefree = $keyinfo['remaining'];
+            sleep(1);
+        }
+        $subset = array_slice($ids, $i, 100);
+        $param_list = implode(",", $subset);
+
+        $params = array(
+            'id' => $param_list,
+            'tweet_mode' => 'extended',
+        );
+
+        $code = $tmhOAuth->user_request(array(
+            'method' => 'GET',
+            'url' => $tmhOAuth->url('1.1/statuses/lookup'),
+            'params' => $params
+                ));
+
+	    $ratefree--;
+
+        $reset_connection = false;
+
+        if ($tmhOAuth->response['code'] == 200) {
+            $data = json_decode($tmhOAuth->response['response'], true);
+            if (is_array($data) && empty($data)) {
+                // all tweets in set are deleted
+                continue;
+            }
+            $tweets = $data;
+            foreach ($tweets as $tweet) {
+                $t = new Tweet();
+                $t->fromJSON($tweet);
+                $t->deleteFromBin($bin_name);
+                $tweetQueue->push($t, $bin_name);
+                $lookups++;
+            }
+            usleep(250000);
+            $retries = 0;   // reset retry counter on success
+        } else if ($retries < 4 && $tmhOAuth->response['code'] == 503) {
+            /* this indicates problems on the Twitter side, such as overcapacity. we slow down and retry the connection */
+            sleep(7);
+            $i -= 100;  // rewind
+            $retries++;
+            $reset_connection = true;
+        } else if ($retries < 4) {
+            logit($logtarget, "Twitter REST failure with code " . $tmhOAuth->response['response']['code']);
+            logit($logtarget, "The error may not be permanent; we will sleep and retry the request.");
+            sleep(7);
+            $i -= 100;  // rewind
+            $retries++;
+            $reset_connection = true;
+        } else {
+            logit($logtarget, "Permanent error when querying the Twitter API. Please investigate the error output. Now stopping.");
+            return false;
+        }
+
+        if ($reset_connection) {
+            logit($logtarget, "Reconnecting to API.");
+            $tmhOAuth = new tmhOAuth(array(
+                        'consumer_key' => $twitter_keys[$current_key]['twitter_consumer_key'],
+                        'consumer_secret' => $twitter_keys[$current_key]['twitter_consumer_secret'],
+                        'token' => $twitter_keys[$current_key]['twitter_user_token'],
+                        'secret' => $twitter_keys[$current_key]['twitter_user_secret'],
+                    ));
+            $reset_connection = false;
+        } else {
+            $tweetQueue->insertDB();
+            logit($logtarget, "Updated $lookups tweets in $bin_name");
+        }
+
     }
 
+    return true;
+
+}
+
+/*
+ * Attempt to retrieve available disk space (in megabytes) for MySQL. Returns null if information is not available.
+ */
+function get_available_mysql_disk_space($logtarget = "cli") {
+    $dbh = pdo_connect();
+    $sql = "SHOW VARIABLES WHERE Variable_Name LIKE '%datadir%'";
+    $rec = $dbh->prepare($sql);
+    $datadir = null;
+    if ($rec->execute() && $rec->rowCount() > 0) {
+        while ($res = $rec->fetch()) {
+            $datadir = $res['Value'];
+        }
+    }
+    if (is_null($datadir)) {
+        logit($logtarget, "Cannot find datadir system variable in MySQL.");
+        return null;
+    }
+    logit($logtarget, "MySQL data directory found: " . $datadir);
+    $free_space_bytes = disk_free_space($datadir);
+    if ($free_space_bytes == NULL) {
+        logit($logtarget, "Cannot read available disk space on path: $datadir");
+        return null;
+    }
+    logit($logtarget, "Free space in data directory: " . intval($free_space_bytes / 1024 / 1024) . "M");
+    return intval($free_space_bytes / 1024 / 1024);
 }
 
 /*

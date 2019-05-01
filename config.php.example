@@ -150,7 +150,13 @@ ini_set("max_execution_time", 3600);
 /*
  * How much memory the script is allowed to take
  */
-ini_set("memory_limit", "2G");
+ini_set("memory_limit", "4G");
+
+/*
+ * Enable URL expander? This script will follow the links of all URLs inside tweets and resolve the final location they point towards.
+ * It generates a lot of requests to external hosts, but allows for more detailed URL queries.
+ */
+define('ENABLE_URL_EXPANDER', false);
 
 /* Sysload monitoring. Display a traffic light indicating system load in the analysis panel */
 
@@ -168,6 +174,15 @@ define('TCAT_SYSLOAD_MAXIMUM', 55);
  * Set encoding
  */
 mb_internal_encoding("UTF-8");
+
+/*
+ * Set default MySQL storage engine for the creation of new tables
+ *
+ * Historically, TCAT used the MyISAM storage engine exclusively, but newer versions may support multiple engines.
+ * Since April 2019 the preferred engine for new TCAT deployments is TokuDB. 
+ * (EXPERTS ONLY)
+ */
+define('MYSQL_ENGINE_OPTIONS', 'ENGINE=TokuDB COMPRESSION=TOKUDB_LZMA');
 
 /*
  * set location of php
@@ -200,5 +215,10 @@ define('DISABLE_INSERT_IGNORE', false);
  * You will want to change this only when you have forked the repository.
  */
 define('REPOSITORY_URL', 'https://github.com/digitalmethodsinitiative/dmi-tcat.git');
+
+/*
+ * Enable producing a (huge) JSON dump with raw Tweet contents for debugging purposes.
+ */
+define('ENABLE_JSON_DUMP', false);
  
 ?>

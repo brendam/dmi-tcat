@@ -4,7 +4,7 @@ include_once __DIR__ . '/../common/constants.php';
 include_once __DIR__ . '/../common/functions.php';
 
 if (!is_admin())
-    die("Go away, you evil hacker!");
+    die("Sorry, access denied. Your username does not match the ADMIN user defined in the config.php file.");
 
 include_once __DIR__ . '/query_manager.php';
 include_once __DIR__ . '/../common/functions.php';
@@ -158,14 +158,14 @@ $lastRateLimitHit = getLastRateLimitHit();
             }
         }
         $tests = upgrades(true);
-        if ($tests['suggested'] == true) {
+        if ($tests['suggested'] || $tests['required']) {
             if (!$showupdatemsg) {
                 print '<div id="updatewarning">';
             } else {
                 print '<br/>';
             }
             $wikilink = 'https://github.com/digitalmethodsinitiative/dmi-tcat/wiki/Upgrading-TCAT#upgrading-database-tables';
-            if ($tests['required'] == true) {
+            if ($tests['required']) {
                     print "Your database is out-of-date and needs to be upgraded to fix bugs. Follow the <a href='$wikilink' target='_blank'>documentation</a> and run the command-line script common/upgrade.php from your shell.<br/>";
             } else {
                     print "Your database must be updated before some new TCAT features can be used. Follow the <a href='$wikilink' target='_blank'>documentation</a> and run the command-line script common/upgrade.php from your shell.<br/>";
@@ -258,6 +258,7 @@ $lastRateLimitHit = getLastRateLimitHit();
         echo '<th></th>';
         echo '<th></th>';
         echo '<th></th>';
+        echo '<th></th>';
         echo '</tr>';
         echo '</thead>';
         echo '<tbody>';
@@ -277,7 +278,7 @@ $lastRateLimitHit = getLastRateLimitHit();
             } elseif (strstr($bin->type, "follow") !== false || strstr($bin->type, "timeline") !== false) {
                 foreach ($bin->users as $user) {
                     $phrasePeriodsList[$user->id] = array_unique($user->periods);
-                    $phraseList[$user->id] = $user->id;
+                    $phraseList[$user->id] = empty($user->user_name) ? $user->id : $user->user_name;
                     if ($user->active) {
                         $activePhraselist[$user->id] = $user->id;
                     }

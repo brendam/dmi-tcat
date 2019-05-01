@@ -6,16 +6,6 @@ require_once __DIR__ . '/../../common/constants.php'; // include constants file
 error_reporting(E_ALL);
 ini_set("max_execution_time", 0);       // capture script want unlimited execution time
 
-function pdo_connect() {
-    global $dbuser, $dbpass, $database, $hostname;
-
-    $dbh = new PDO("mysql:host=$hostname;dbname=$database;charset=utf8mb4", $dbuser, $dbpass, array(PDO::MYSQL_ATTR_INIT_COMMAND => "set sql_mode='ALLOW_INVALID_DATES'"));
-    $dbh->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $dbh->query("set time_zone='+00:00'");
-
-    return $dbh;
-}
-
 function geophp_sane() {
     $sane = true;
     if (!geoPHP::geosInstalled()) {
@@ -53,11 +43,11 @@ function create_error_logs() {
         $creating_tables_for_fresh_install = true;
     }
 
-    $sql = 'create table if not exists tcat_error_ratelimit ( id bigint auto_increment, type varchar(32), start datetime not null, end datetime not null, tweets bigint not null, primary key(id), index(type), index(start), index(end) ) ENGINE=MyISAM';
+    $sql = 'create table if not exists tcat_error_ratelimit ( id bigint auto_increment, type varchar(32), start datetime not null, end datetime not null, tweets bigint not null, primary key(id), index(type), index(start), index(end) ) ' . MYSQL_ENGINE_OPTIONS;
     $h = $dbh->prepare($sql);
     $h->execute();
 
-    $sql = 'create table if not exists tcat_error_gap ( id bigint auto_increment, type varchar(32), start datetime not null, end datetime not null, primary key(id), index(type), index(start), index(end) ) ENGINE=MyISAM';
+    $sql = 'create table if not exists tcat_error_gap ( id bigint auto_increment, type varchar(32), start datetime not null, end datetime not null, primary key(id), index(type), index(start), index(end) ) ' . MYSQL_ENGINE_OPTIONS;
     $h = $dbh->prepare($sql);
     $h->execute();
 
@@ -73,7 +63,7 @@ function create_error_logs() {
     `value` varchar(1024),
     PRIMARY KEY `variable` (`variable`),
             KEY `value` (`value`)
-    ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -99,6 +89,17 @@ function create_error_logs() {
         $sql = "insert into tcat_status ( variable, value ) values ( 'tz_mentions_resync', 1 )";
         $insert = $dbh->prepare($sql);
         $insert->execute();
+    }
+
+    // Some GIT updates (such as fixes for important bug) may require an immediate restart of capture roles
+    $sql = "select value from tcat_status where variable = 'retweetbug_fixed_since'";
+    $test = $dbh->prepare($sql);
+    $test->execute();
+    if ($test->rowCount() == 0) {
+        $sql = "insert into tcat_status ( variable, value ) values ( 'retweetbug_fixed_since', now() )";
+        $insert = $dbh->prepare($sql);
+        $insert->execute();
+        controller_restart_roles();
     }
 
 }
@@ -139,8 +140,7 @@ function create_bin($bin_name, $dbh = false) {
                     KEY `tweet_id` (`tweet_id`),
                     KEY `text` (`text`),
                     KEY `from_user_name` (`from_user_name`)
-            ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
-
+            ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
         $create_hashtags = $dbh->prepare($sql);
         $create_hashtags->execute();
 
@@ -153,7 +153,7 @@ function create_bin($bin_name, $dbh = false) {
                     KEY `user_id` (`user_id`),
                     KEY `tweet_id` (`tweet_id`),
                     KEY `country` (`country`)
-            ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+            ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
         $create_withheld = $dbh->prepare($sql);
         $create_withheld->execute();
@@ -163,7 +163,7 @@ function create_bin($bin_name, $dbh = false) {
             `id` varchar(32) NOT NULL,
             `tweet_id` bigint(20) NOT NULL,
             PRIMARY KEY (`id`, `tweet_id`)
-            ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+            ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
         $create_places = $dbh->prepare($sql);
         $create_places->execute();
@@ -185,7 +185,7 @@ function create_bin($bin_name, $dbh = false) {
                     KEY `from_user_id` (`from_user_id`),
                     KEY `to_user` (`to_user`),
                     KEY `to_user_id` (`to_user_id`)
-            ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+            ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
         $create_mentions = $dbh->prepare($sql);
         $create_mentions->execute();
@@ -214,7 +214,7 @@ function create_bin($bin_name, $dbh = false) {
                     `location` varchar(64),
                     `geo_lat` float(10,6),
                     `geo_lng` float(10,6),
-                    `text` varchar(255) NOT NULL,
+                    `text` text NOT NULL,
                     `retweet_id` bigint(20),
                     `retweet_count` int(11),
                     `favorite_count` int(11),
@@ -225,7 +225,6 @@ function create_bin($bin_name, $dbh = false) {
                     `lang` varchar(16),
                     `possibly_sensitive` tinyint(1),
                     `quoted_status_id` bigint,
-                    `truncated` tinyint(1),
                     `withheld_copyright` tinyint(1),
                     `withheld_scope` varchar(32),
                     PRIMARY KEY (`id`),
@@ -240,11 +239,11 @@ function create_bin($bin_name, $dbh = false) {
                     KEY `possibly_sensitive` (`possibly_sensitive`),
                     KEY `withheld_copyright` (`withheld_copyright`),
                     KEY `withheld_scope` (`withheld_scope`),
-                    FULLTEXT KEY `from_user_description` (`from_user_description`),
-                    FULLTEXT KEY `text` (`text`)
-                    ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4";
+                    KEY `from_user_description` (`from_user_description`(32)),
+                    KEY `text` (`text`(32))
+                    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
-        $create_tweets = $dbh->prepare($sql);
+	$create_tweets = $dbh->prepare($sql);
         $create_tweets->execute();
 
         $sql = "CREATE TABLE IF NOT EXISTS " . quoteIdent($bin_name . "_urls") . " (
@@ -262,9 +261,9 @@ function create_bin($bin_name, $dbh = false) {
                     KEY `tweet_id` (`tweet_id`),                
                     KEY `created_at` (`created_at`),
                     KEY `from_user_id` (`from_user_id`),
-                    FULLTEXT KEY `url_followed` (`url_followed`),
+                    KEY `url_followed` (`url_followed`),
                     KEY `url_expanded` (`url_expanded`)
-            ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+            ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
         $create_urls = $dbh->prepare($sql);
         $create_urls->execute();
@@ -287,7 +286,7 @@ function create_bin($bin_name, $dbh = false) {
                     KEY `photo_size_width` (`photo_size_width`),
                     KEY `photo_size_height` (`photo_size_height`),
                     KEY `photo_resize` (`photo_resize`)
-            ) ENGINE=MyISAM  DEFAULT CHARSET=utf8mb4";
+            ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
         $create_media = $dbh->prepare($sql);
         $create_media->execute();
@@ -313,7 +312,7 @@ function create_admin() {
     KEY `querybin` (`querybin`),
     KEY `type` (`type`),
     KEY `active` (`active`)
-    ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -326,7 +325,7 @@ function create_admin() {
     KEY `querybin_id` (`querybin_id`),
     KEY `starttime` (`starttime`),
     KEY `endtime` (`endtime`)
-    ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -335,7 +334,7 @@ function create_admin() {
     `phrase` VARCHAR(255) NOT NULL,
     PRIMARY KEY (`id`),
     KEY `phrase` (`phrase`)
-    ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -343,7 +342,7 @@ function create_admin() {
     `id` bigint NOT NULL,
     `user_name` varchar(255),
     PRIMARY KEY `id` (`id`)
-    ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -358,7 +357,7 @@ function create_admin() {
     KEY `endtime` (`endtime`),
     KEY `phrase_id` (`phrase_id`),
     KEY `querybin_id` (`querybin_id`)
-    ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -373,7 +372,7 @@ function create_admin() {
     KEY `endtime` (`endtime`),
     KEY `user_id` (`user_id`),
     KEY `querybin_id` (`querybin_id`)
-    ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -382,7 +381,7 @@ function create_admin() {
     `task` VARCHAR(32) NOT NULL,
     `instruction` VARCHAR(255) NOT NULL,
     `ts_issued` timestamp DEFAULT current_timestamp,
-    primary key(id) ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    primary key(id) ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -442,7 +441,7 @@ function create_admin() {
     `phrase_id` BIGINT(20) NOT NULL,
     `created_at` DATETIME NOT NULL,
     PRIMARY KEY (`tweet_id`, `phrase_id`),
-    KEY `created_at` (`created_at`) ) ENGINE = MyISAM DEFAULT CHARSET = utf8mb4";
+    KEY `created_at` (`created_at`) ) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET = utf8mb4";
     $create = $dbh->prepare($sql);
     $create->execute();
 
@@ -543,7 +542,6 @@ function ratelimit_holefiller($minutes) {
         // fill in the hole
 
         $sql = "insert into tcat_error_ratelimit ( type, start, end, tweets ) values ( :type, date_sub(date_sub(date_sub(now(), interval $i minute), interval second(date_sub(now(), interval $i minute)) second), interval 1 minute), date_sub(date_sub(now(), interval " . ($i - 1) . " minute), interval second(date_sub(now(), interval " . ($i - 1) . " minute)) second), 0)";
-        logit(CAPTURE . ".error.log", "$sql");
         $h = $dbh->prepare($sql);
         $type = CAPTURE;
         $h->bindParam(":type", $type, PDO::PARAM_STR);
@@ -605,19 +603,24 @@ function gap_record($role, $ustart, $uend) {
  */
 
 function ratelimit_report_problem() {
+    $dbh = pdo_connect();
     if (defined('RATELIMIT_MAIL_HOURS') && RATELIMIT_MAIL_HOURS > 0) {
-        $sql = "select count(*) as cnt from tcat_status where variable = 'email_ratelimit' and value > (now() - interval " . RATELIMIT_MAIL_HOURS . " hour);";
-        $result = mysql_query($sql);
-        if ($row = mysql_fetch_assoc($result)) {
-            if (isset($row['cnt']) && $row['cnt'] == 0) {
-                /* send e-mail and register time of the action */
-                $sql = "delete from tcat_status where variable = 'email_ratelimit'";
-                $result = mysql_query($sql);
-                $sql = "insert into tcat_status ( variable, value ) values ( 'email_ratelimit', now() )";
-                $result = mysql_query($sql);
-                global $mail_to;
-                mail($mail_to, 'DMI-TCAT rate limit has been reached (server: ' . getHostName() . ')', 'The script running the ' . CAPTURE . ' query has hit a rate limit while talking to the Twitter API. Twitter is not allowing you to track more than 1% of its total traffic at any time. This means that the number of tweets exceeding the barrier are being dropped. Consider reducing the size of your query bins and reducing the number of terms and users you are tracking.' . "\n\n" .
-                        'This may be a temporary or a structural problem. Please look at the webinterface for more details. Rate limit statistics on the website are historic, however. Consider this message indicative of a current issue. This e-mail will not be repeated for at least ' . RATELIMIT_MAIL_HOURS . ' hours.', 'From: no-reply@dmitcat');
+        $sql = "select count(*) as cnt from tcat_status where variable = 'email_ratelimit' and value > (now() - interval " . RATELIMIT_MAIL_HOURS . " hour)";
+        $rec = $dbh->prepare($sql);
+        if ($rec->execute() && $rec->rowCount() > 0) {
+            if ($row = $rec->fetch()) {
+                if (isset($row['cnt']) && $row['cnt'] == 0) {
+                    /* send e-mail and register time of the action */
+                    $sql = "delete from tcat_status where variable = 'email_ratelimit'";
+                    $rec = $dbh->prepare($sql);
+                    $rec->execute();
+                    $sql = "insert into tcat_status ( variable, value ) values ( 'email_ratelimit', now() )";
+                    $rec = $dbh->prepare($sql);
+                    $rec->execute();
+                    global $mail_to;
+                    mail($mail_to, 'DMI-TCAT rate limit has been reached (server: ' . getHostName() . ')', 'The script running the ' . CAPTURE . ' query has hit a rate limit while talking to the Twitter API. Twitter is not allowing you to track more than 1% of its total traffic at any time. This means that the number of tweets exceeding the barrier are being dropped. Consider reducing the size of your query bins and reducing the number of terms and users you are tracking.' . "\n\n" .
+                            'This may be a temporary or a structural problem. Please look at the webinterface for more details. Rate limit statistics on the website are historic, however. Consider this message indicative of a current issue. This e-mail will not be repeated for at least ' . RATELIMIT_MAIL_HOURS . ' hours.', 'From: no-reply@dmitcat');
+                }
             }
         }
     }
@@ -869,6 +872,19 @@ function coordinatesInsideBoundingBox($point_lng, $point_lat, $sw_lng, $sw_lat, 
     return $geobox->contains($geopoint);
 }
 
+// Get the area of a specific geophrase
+function geoPhraseArea($geophrase) {
+    $box = explode(",", $geophrase);
+    $sw_lng = $box[0]; $sw_lat = $box[1]; $ne_lng = $box[2]; $ne_lat = $box[3];
+    $boxwkt = 'POLYGON((' . $sw_lng . ' ' . $sw_lat . ', '
+            . $sw_lng . ' ' . $ne_lat . ', '
+            . $ne_lng . ' ' . $ne_lat . ', '
+            . $ne_lng . ' ' . $sw_lat . ', '
+            . $sw_lng . ' ' . $sw_lat . '))';
+    $geobox = geoPHP::load($boxwkt, 'wkt');
+    return $geobox->area();
+}
+
 /*
  * Create a full location query string from multiple coordinate 'phrases' (geobox phrases)
  */
@@ -1052,6 +1068,7 @@ function queryManagerCreateBinFromExistingTables($binname, $querybin_id, $type, 
     $dbh = pdo_connect();
 
     // select start and end of dataset
+    // note: this is information may not be available when this function is being called, see queryManagerSetPeriodsOnCreation()
     $sql = "SELECT min(created_at) AS min, max(created_at) AS max FROM " . $binname . "_tweets";
     $rec = $dbh->prepare($sql);
     if (!$rec->execute() || !$rec->rowCount())
@@ -1103,18 +1120,172 @@ function queryManagerCreateBin($binname, $type, $starttime = "0000-00-00 00:00:0
     return $querybin_id;
 }
 
+/*
+ * In CLI scripts such as search.php, we typically create the query bin and their associated phrases before we start capturing.
+ * This has become neccessary because we want to fill the tcat_captured_phrases table as we progress (matching a captured tweet id to a specific phrase id).
+ * Because we would later like to have the full period information (start and end time) available, we must call the queryManagerSetOnCreation() function
+ * after having filled the bin with data.
+ */
+function queryManagerSetPeriodsOnCreation($binname, $queries = array()) {
+    $dbh = pdo_connect();
+    $querybin_id = queryManagerBinExists($binname, true);
+    if ($querybin_id !== false) {
+        print "[debug] querybin_id = $querybin_id\n";
+        /* first update the period information for the entire query bin */
+        $sql = "SELECT min(created_at) AS starttime, max(created_at) AS endtime FROM " . quoteIdent($binname . "_tweets");
+        $rec = $dbh->prepare($sql);
+        $starttime = $endtime = false;
+        if ($rec->execute() || $rec->rowCount()) {
+            $res = $rec->fetch();
+            $starttime = $res['starttime'];
+            $endtime = $res['endtime'];
+            if (gettype($starttime) == "NULL" || gettype($endtime) == "NULL") { return; }
+            $sql = "UPDATE tcat_query_bins_periods SET starttime = :starttime, endtime = :endtime WHERE querybin_id = :querybin_id";
+            print "[debug] $sql ($querybin_id, $starttime, $endtime)\n";
+            $rec = $dbh->prepare($sql);
+            $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+            $rec->bindParam(":starttime", $starttime, PDO::PARAM_STR);
+            $rec->bindParam(":endtime", $endtime, PDO::PARAM_STR);
+            $rec->execute();
+        }
+        if ($starttime !== false && $endtime !== false) {
+
+            if (is_array($queries) && count($queries) > 0) {
+
+                // This is a bin of type search or track
+
+                foreach ($queries as $query) {
+                    $trimquery = trim($query);
+                    /* get the phrase id for this query */
+                    $phrase_id = false;
+                    $sql = "SELECT TQBP.phrase_id as phrase_id FROM tcat_query_bins_phrases TQBP INNER JOIN tcat_query_phrases TQP ON TQP.id = TQBP.phrase_id WHERE TQBP.querybin_id = :querybin_id AND TQP.phrase = :phrase";
+                    print "[debug] $sql ($querybin_id, $query)\n";
+                    $rec = $dbh->prepare($sql);
+                    $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+                    $rec->bindParam(":phrase", $trimquery, PDO::PARAM_STR);
+                    if ($rec->execute() && $rec->rowCount() > 0) {
+                        if ($res = $rec->fetch()) {
+                            $phrase_id = $res['phrase_id'];
+                        }
+                    } else {
+                        // DEBUG
+                        print "[debug] NO RESULTS!\n";
+                    }
+                    /* lookup the specific starttime and endtime inside tcat_captured_phrases table */
+                    $p_starttime = $p_endtime = false;
+                    if ($phrase_id !== false) {
+                        $sql = "SELECT min(created_at) as starttime, max(created_at) as endtime from tcat_captured_phrases where phrase_id = :phrase_id";
+                        print "[debug] $sql ($phrase_id)\n";
+                        $rec = $dbh->prepare($sql);
+                        $rec->bindParam(":phrase_id", $phrase_id, PDO::PARAM_INT);
+                        if ($rec->execute() && $rec->rowCount() > 0) {
+                            if ($res = $rec->fetch()) {
+                                $p_starttime = $res['starttime'];
+                                $p_endtime = $res['endtime'];
+                            }
+                        }
+                    }
+                    /* If we do not have fine-granularity period information from the tcat_captured_phrases table, use information from entire bin */
+                    $use_starttime = (is_string($p_starttime) && strlen($p_starttime) > 0) ? $p_starttime : $starttime;
+                    $use_endtime = (is_string($p_endtime) && strlen($p_endtime) > 0) ? $p_endtime : $endtime;
+                    /* update the period information for this phrase */
+                    $sql = "UPDATE tcat_query_bins_phrases SET starttime = :starttime, endtime = :endtime WHERE querybin_id = :querybin_id AND phrase_id = :phrase_id";
+                    print "[debug] $sql ($use_starttime, $use_endtime, $querybin_id, $phrase_id)\n";
+                    $rec = $dbh->prepare($sql);
+                    $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+                    $rec->bindParam(":phrase_id", $phrase_id, PDO::PARAM_INT);
+                    $rec->bindParam(":starttime", $use_starttime, PDO::PARAM_STR);
+                    $rec->bindParam(":endtime", $use_endtime, PDO::PARAM_STR);
+                    $rec->execute();
+                }
+
+            } else {
+
+                $type = getBinType($binname);
+                if ($type == 'follow' || $type == 'timeline') {
+    
+                    // This is a bin of type search or track
+
+                    $user_ids = array();
+                    $sql = "SELECT DISTINCT(user_id) AS user_id FROM tcat_query_bins_users WHERE querybin_id = :querybin_id AND user_id IS NOT NULL";
+                    $rec = $dbh->prepare($sql);
+                    $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+                    if ($rec->execute()) {
+                        while ($res = $rec->fetch()) {
+                               $user_ids[] = $res['user_id'];
+                        }
+                    }
+                    foreach ($user_ids as $user_id) {
+                        $sql = "SELECT min(created_at) AS starttime, max(created_at) AS endtime FROM " . quoteIdent($binname . "_tweets") . " WHERE from_user_id = :user_id";
+                        $rec = $dbh->prepare($sql);
+$rec->bindParam(":user_id", $user_id, PDO::PARAM_INT);
+                        $starttime = $endtime = false;
+                        if ($rec->execute() && $rec->rowCount()) {
+                            $res = $rec->fetch();
+                            $starttime = $res['starttime'];
+                            $endtime = $res['endtime'];
+                            $sql = "UPDATE tcat_query_bins_users SET starttime = :starttime, endtime = :endtime WHERE querybin_id = :querybin_id AND user_id = :user_id";
+                            $rec = $dbh->prepare($sql);
+                            $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+                            $rec->bindParam(":user_id", $user_id, PDO::PARAM_INT);
+                            $rec->bindParam(":starttime", $starttime, PDO::PARAM_STR);
+                            $rec->bindParam(":endtime", $endtime, PDO::PARAM_STR);
+                            $rec->execute();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 function queryManagerInsertPhrases($querybin_id, $phrases, $starttime = "0000-00-00 00:00:00", $endtime = "0000-00-00 00:00:00") {
     $dbh = pdo_connect();
     foreach ($phrases as $phrase) {
         $phrase = trim($phrase);
         if (empty($phrase))
             continue;
-        $sql = "INSERT IGNORE INTO tcat_query_phrases (phrase) VALUES (:phrase)";
+
+        // Check if the phrase is known in the tables; in which case we will re-use the id.
+
+        $phrase_id = null;
+        $sql = "SELECT * FROM tcat_query_phrases WHERE phrase = :phrase";
         $rec = $dbh->prepare($sql);
-        $rec->bindParam(':phrase', $phrase, PDO::PARAM_STR); //
-        if (!$rec->execute() || !$rec->rowCount())
-            die("failed to insert phrase $phrase\n");
-        $phrase_id = $dbh->lastInsertId();
+        $rec->bindParam(":phrase", $phrase, PDO::PARAM_STR);
+        if (!$rec->execute()) 
+            die("failed to read from tcat_query_phrases (phrase '$phrase': $sql)\n");
+        if ($rec->rowCount() > 0) {
+            $result = $rec->fetch(PDO::FETCH_OBJ);
+            if ($result) {
+                $phrase_id = $result->id;
+            }
+        }
+        if (is_null($phrase_id)) {
+            $sql = "INSERT IGNORE INTO tcat_query_phrases (phrase) VALUES (:phrase)";
+            $rec = $dbh->prepare($sql);
+            $rec->bindParam(':phrase', $phrase, PDO::PARAM_STR); //
+            if (!$rec->execute() || !$rec->rowCount())
+                die("failed to insert phrase $phrase\n");
+            $phrase_id = $dbh->lastInsertId();
+        }
+
+        /*
+         * We do not insert data into the tcat_query_bins_phrases table if an entry for this user and querybin already exists. 
+         * TODO: a future improvement could be to parse $starttime and $endtime, and, if they don't overlap, create a whole new entry in the table
+         */
+
+        $sql = "SELECT * FROM tcat_query_bins_phrases WHERE querybin_id = :querybin_id and phrase_id = :phrase_id";
+        $rec = $dbh->prepare($sql);
+        $rec->bindParam(":phrase_id", $phrase_id, PDO::PARAM_INT);
+        $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+        if (!$rec->execute())
+            die("failed to read from tcat_query_bins_phrases (phrase_id $phrase_id, querybin_id $querybin_id: $sql)\n");
+        if ($rec->rowCount() > 0) {
+            // DEBUG
+            print "SKIPPING (DEBUG)\n";
+            continue;
+        }
+
         $sql = "INSERT INTO tcat_query_bins_phrases (phrase_id,querybin_id,starttime,endtime) VALUES (:phrase_id, :querybin_id, :starttime, :endtime)";
         $rec = $dbh->prepare($sql);
         $rec->bindParam(":phrase_id", $phrase_id, PDO::PARAM_INT);
@@ -1133,6 +1304,19 @@ function queryManagerInsertUsers($querybin_id, $users, $starttime = "0000-00-00 
         $user_id = trim($user_id);
         if (empty($user_id))
             continue;
+        /*
+         * We do not insert data into the table if an entry for this user and querybin already exists. 
+         * TODO: a future improvement could be to parse $starttime and $endtime, and, if they don't overlap, create a whole new entry in the table
+         */
+        $sql = "SELECT * FROM tcat_query_bins_users WHERE querybin_id = :querybin_id and user_id = :user_id";
+        $rec = $dbh->prepare($sql);
+        $rec->bindParam(":user_id", $user_id, PDO::PARAM_INT);
+        $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
+        if (!$rec->execute())
+            die("failed to read from tcat_query_bins_users (user_id $user_id, querybin_id $querybin_id: $sql)\n");
+        if ($rec->rowCount() > 0) {
+            continue;
+        }
         $sql = "INSERT IGNORE INTO tcat_query_users (id) VALUES (:user_id)";
         $rec = $dbh->prepare($sql);
         $rec->bindParam(':user_id', $user_id, PDO::PARAM_INT);
@@ -1178,6 +1362,86 @@ function capture_signal_handler_term($signo) {
     logit(CAPTURE . ".error.log", "exiting now on TERM signal");
 
     exit(0);
+}
+
+function map_screen_names_to_ids($screen_names = array()) {
+    global $twitter_keys;
+    $map = array();
+    // We must do the lookups in chunks of 100 screen names
+    $limit = 100;
+    for ($i = 0; $i < count($screen_names); $i += $limit) {
+        $request = count($screen_names) - $i;
+        if ($request > 100) { $request = 100; }
+        $subset = array_slice($screen_names, $i, $request);
+        $query = implode(",", $subset);
+        $keyinfo = getRESTKey(0, 'users', 'lookup');
+        $current_key = $keyinfo['key'];
+        $ratefree = $keyinfo['remaining'];
+
+        $tmhOAuth = new tmhOAuth(array(
+                                'consumer_key' => $twitter_keys[$current_key]['twitter_consumer_key'],
+                                'consumer_secret' => $twitter_keys[$current_key]['twitter_consumer_secret'],
+                                'token' => $twitter_keys[$current_key]['twitter_user_token'],
+                                'secret' => $twitter_keys[$current_key]['twitter_user_secret'],
+                        ));
+        $params = array(
+                'screen_name' => $query,
+        );
+
+        $tmhOAuth->user_request(array(
+                'method' => 'GET',
+                'url' => $tmhOAuth->url('1.1/users/lookup'),
+                'params' => $params
+        ));
+
+        if ($tmhOAuth->response['code'] == 200) {
+                $users = json_decode($tmhOAuth->response['response'], true);
+                foreach ($users as $user) {
+                        $map[$user['screen_name']] = $user['id_str'];
+                }
+        }
+    }
+    return $map;
+}
+
+function map_ids_to_screen_names($ids = array()) {
+    global $twitter_keys;
+    $map = array();
+    // We must do the lookups in chunks of 100 ids
+    $limit = 100;
+    for ($i = 0; $i < count($ids); $i += $limit) {
+        $request = count($ids) - $i;
+        if ($request > 100) { $request = 100; }
+        $subset = array_slice($ids, $i, $request);
+        $query = implode(",", $subset);
+        $keyinfo = getRESTKey(0, 'users', 'lookup');
+        $current_key = $keyinfo['key'];
+        $ratefree = $keyinfo['remaining'];
+
+        $tmhOAuth = new tmhOAuth(array(
+                                'consumer_key' => $twitter_keys[$current_key]['twitter_consumer_key'],
+                                'consumer_secret' => $twitter_keys[$current_key]['twitter_consumer_secret'],
+                                'token' => $twitter_keys[$current_key]['twitter_user_token'],
+                                'secret' => $twitter_keys[$current_key]['twitter_user_secret'],
+                        ));
+        $params = array(
+                'user_id' => $query,
+        );
+
+        $tmhOAuth->user_request(array(
+                'method' => 'GET',
+                'url' => $tmhOAuth->url('1.1/users/lookup'),
+                'params' => $params
+        ));
+
+        if ($tmhOAuth->response['code'] == 200) {
+                $users = json_decode($tmhOAuth->response['response'], true);
+                foreach ($users as $user) {
+                        $map[$user['id_str']] = $user['screen_name'];
+                }
+        }
+    }
+    return $map;
 }
 
 /**
@@ -1364,6 +1628,8 @@ class Tweet {
         $this->from_user_favourites_count = $data["user"]["favourites_count"];
         $this->source = $data["source"];
         $this->location = $data["user"]["location"];
+        /* Deprecated field will now store non-boolean value */
+        $this->truncated = -1;
         $this->geo_lat = null;
         $this->geo_lng = null;
         if ($data["geo"] != null) {
@@ -1371,55 +1637,61 @@ class Tweet {
             $this->geo_lng = $data["geo"]["coordinates"][1];
         }
 
-        /*
-         * Truncated tweets are tweets with more than 140 characters; the full text being stored in an extended tweet segment.
-         * The truncated boolean is set to true in the API when this occurs.
-         * We repurpose this truncated boolean to set it to true when the tweet text exceeds our own internal storage limit of 254 bytes.
-         */
-
-        $full_text = "";
-        $this->truncated = 0;
-
         if (!isset($data["text"])) {
             /* running in extended context, text field does not exist in JSON response (default for REST API) */
             $full_text = $data["full_text"];
         } else if (!array_key_exists('extended_tweet', $data)) {
-            /* running in compatibility mode, we have no full text available (this should not happen) */
+            /* running in compatibility mode BUT the 'extended_tweet' JSON field is not available. this means the tweet is <= 140 characters */
             $full_text = $data["text"];
         } else {
-            /* running in compatibility mode with full text in extra structure (default for streaming API) */
+            /*
+             * Running in compatibility mode AND the 'extended_tweet' JSON field is available. this means the tweet is > 140 characters and
+             * Twitter has put all relevant metadata in a separate hierarchy.
+             *
+             * See: https://developer.twitter.com/en/docs/tweets/tweet-updates section 'Compatibility mode JSON rendering'
+             * and: https://github.com/digitalmethodsinitiative/dmi-tcat/issues/311)
+             *
+             */
             $full_text = $data["extended_tweet"]["full_text"];
+            $data["entities"] = $data["extended_tweet"]["entities"];
+            if (array_key_exists("extended_entities", $data["extended_tweet"])) {
+                $data["extended_entities"] = $data["extended_tweet"]["extended_entities"];
+            }
         }
         
         $store_text = $full_text;
+
         if (isset($data["retweeted_status"])) {
+
             /*
              * Incorporate full retweet text from retweeted_status to cope with possible truncated due to character limit.
              * This fix makes the stored text more closely resemble the tweet a shown to the end-user.
              * See the discussion here: https://github.com/digitalmethodsinitiative/dmi-tcat/issues/74
-             *
-             * NOTE: this fix will probably not be neccessary in the near future, because Twitter has announced
-             * mentions in tweets will no longer count for the character limit.
              */
-            if (array_key_exists('full_text', $data["retweeted_status"])) {
-                $store_text = "RT @" . $data["retweeted_status"]["user"]["screen_name"] . ": " . $data["retweeted_status"]["full_text"];
+
+            // Determine the full, untruncated retweet text using a similar mechanism as used for non-retweets
+            if (!isset($data["retweeted_status"]["text"])) {
+                /* running in extended context */
+                $retweet_text = $data["retweeted_status"]["full_text"];
+            } else if (!array_key_exists('extended_tweet', $data["retweeted_status"])) {
+                /* running in compatibility mode BUT the 'extended_tweet' JSON field is not available. this means the retweet is <= 140 characters */
+                $retweet_text = $data["retweeted_status"]["text"];
             } else {
-                $store_text = "RT @" . $data["retweeted_status"]["user"]["screen_name"] . ": " . $data["retweeted_status"]["text"];
-            }
-        }
-        /* calculate string length as it will be seen by MySQL */
-        if (mb_strlen($store_text, '8bit') > 254) {
-            /* the effective storage limit of 254 bytes is being exceeded */
-            $this->truncated = 1;
-            if (array_key_exists('extended_tweet', $data)) {
-                /* We only retain the displayable text */
-                $store_text = mb_substr($data['extended_tweet']['full_text'], $data['extended_tweet']['display_text_range'][0], $data['extended_tweet']['display_text_range'][1] - $data['extended_tweet']['display_text_range'][0], '8bit');
-            } else {
-                /* We truncate the string manually */
-                $store_text = mb_substr($store_text, 0, 254, '8bit');
+                /* Running in compatibility mode AND the 'extended_tweet' JSON field is available. this means the retweet is > 140 characters */
+                $retweet_text = $data["retweeted_status"]["extended_tweet"]["full_text"];
             }
 
+            $store_text = "RT @" . $data["retweeted_status"]["user"]["screen_name"] . ": " . $retweet_text;
+
+            /*
+             * CAVEAT: if the RT text is > 280 characters, the final segment of the original tweet could contain an entity.
+             * The Twitter API will remove that entity from the main tweet and store it only in the retweeted_status hierarchy.
+             * On the other hand, the main tweet hierarchy will contain one mention more, namely the retweeted user.
+             * We do not at the moment import the entities from the retweeted status hierarchy (although that could be argued for)
+             * because 1) they are not visible to the end-user, 2) it would complicate entity processing even more.
+             */
         }
+
         $this->text = $store_text;
 
         $this->retweet_id = null;
@@ -1898,7 +2170,28 @@ class TweetQueue {
                 try {
                     $tweetq->execute();
                 } catch (PDOException $e) {
-                    $this->reportPDOError($e, $bin_name . '_tweets');
+                    $errInfo = $dbh->errorInfo();
+                    if ($errInfo[0] == '42S02' || $errInfo[0] == '1146') {
+                        // 42S02: SQLSTATE[42S02]: Base table or view not found: 1146
+                        logit(CAPTURE . ".error.log", "table $bin_name" . "_tweets went missing. This is expected behavior if a live upgrade is in progress.");
+                        $failure = false;
+                        for ($retries = 0; $retries < 3; $retries++) {
+                            sleep(1); $failure = false;
+                            try { $tweetq->execute(); } catch (PDOException $e) {
+                                $failure = true;
+                            }
+                            if ($failure == false) {
+                                break;
+                            }
+                        }
+                        if ($failure) {
+                            $this->reportPDOError($e, $bin_name . '_tweets');
+                        } else {
+                            logit(CAPTURE . ".error.log", "table $bin_name" . "_tweets is back. Queue has been flushed.");
+                        }
+                    } else {
+                        $this->reportPDOError($e, $bin_name . '_tweets');
+                    }
                 }
             }
             if ($statement['hashtags'] !== '') {
@@ -2020,7 +2313,7 @@ class TwitterRelations {
                 user2_realname varchar(255),
 		KEY `user1_id` (`user1_id`), 
                 KEY `user2_id` (`user2_id`)
-		) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4";
+		) " . MYSQL_ENGINE_OPTIONS . " DEFAULT CHARSET=utf8mb4";
 
         if ($dbh->exec($sql)) {
             return TRUE;
@@ -2247,6 +2540,11 @@ function tracker_run() {
 
 function tracker_streamCallback($data, $length, $metrics) {
     global $capturebucket, $lastinsert;
+
+    if (defined('ENABLE_JSON_DUMP') && ENABLE_JSON_DUMP) {
+        file_put_contents(BASE_FILE . 'logs/stream.dump.json', $data . ",\n", FILE_APPEND|LOCK_EX);
+    }
+
     $now = time();
     $data = json_decode($data, true);
 
@@ -2376,6 +2674,11 @@ function processtweets($capturebucket) {
             }
 
             $found = false;
+
+            // Create a Tweet object from the raw JSON
+
+            $tweet = new Tweet();
+            $tweet->fromJSON($data);
 
             if (CAPTURE == "track") {
 
@@ -2508,7 +2811,7 @@ function processtweets($capturebucket) {
                             $all = true;
 
                             foreach ($tmplist as $tmp) {
-                                if (stripos($data["text"], $tmp) == FALSE) {
+                                if (tweet_contains_phrase($data["text"], $tmp) == FALSE) {
                                     $all = false;
                                     break;
                                 }
@@ -2522,7 +2825,7 @@ function processtweets($capturebucket) {
 
                             // treat quoted queries as single words
                             $query = preg_replace("/'/", "", $query);
-                            if (stripos($data["text"], $query) !== FALSE) {
+                            if (tweet_contains_phrase($data["text"], $query)) {
                                 $pass = true;
                             }
                         }
@@ -2552,8 +2855,6 @@ function processtweets($capturebucket) {
                 continue;
             }
 
-            $tweet = new Tweet();
-            $tweet->fromJSON($data);
             $tweetQueue->push($tweet, $binname);
         }
     }

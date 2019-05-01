@@ -48,7 +48,7 @@ function created_at_condition($dt_start, $dt_end)
 // $dt_start - must either be a DateTime object or NULL.
 // $dt_end - must either be a DateTime object or NULL.
 
-function tweet_info($query_bin, $dt_start, $dt_end)
+function tweet_info($query_bin, $dt_start, $dt_end, $tables = array("tweets"))
 {
 
     // Create WHERE clause to restrict to requested timestamp range
@@ -92,7 +92,8 @@ function tweet_info($query_bin, $dt_start, $dt_end)
     // Only do tweets, otherwise it takes a long time if there are many tweets
     //foreach (["tweets", "hashtags", "mentions", "urls"] as $tbl) {
 
-    foreach (["tweets"] as $tbl) {
+//    foreach (["tweets"] as $tbl) {
+    foreach ($tables as $tbl) {
         $table_name = $bin_name . '_' . $tbl;
         $rec = $dbh->prepare("SELECT count(*) FROM `{$table_name}` $where");
         $rec->execute();
@@ -167,3 +168,352 @@ function tweet_purge($query_bin, $dt_start, $dt_end)
 
     return $result;
 }
+
+//----------------------------------------------------------------
+// Top hashtags
+//
+// Retrieve information about the top hashtags in the time period
+// between $dt_start and $dt_end (inclusive).
+//
+// $query_bin - the array produced by ~/analysis/common/functions.php
+// $dt_start - must either be a DateTime object or NULL.
+// $dt_end - must either be a DateTime object or NULL.
+
+function hashtags_top($query_bin, $dt_start, $dt_end, $limit = NULL) {
+
+    global $esc;
+
+    // This function allows special arguments, similar to the TCAT front-end;
+    // therefore we validate and process those arguments here
+    if (!isset($_GET['dataset'])) {
+        $_GET['dataset'] = $query_bin;
+    }
+    validate_all_variables();
+
+    // Create WHERE clause to restrict to requested timestamp range
+    // Convert to sqlSubset() format
+    if (isset($dt_start) && isset($dt_end)) {
+        $dt_start->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['startdate'] = $dt_start->format('Y-m-d\TH:i:s');
+        $dt_end->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['enddate'] = $dt_end->format('Y-m-d\TH:i:s');
+    }
+    $where = sqlSubset();
+
+    // Query database
+
+    $dbh = pdo_connect();
+
+    $bin_name = $query_bin['bin'];
+
+    // NOTICE: This query does not define a cut-off point
+
+    $sql = 'select h.text, count(h.text) as cnt from ' . $bin_name . '_hashtags h inner join ' . $bin_name . '_tweets t on t.id = h.tweet_id '
+            . $where . ' group by h.text order by count(h.text) desc';
+
+    //$sql = 'select to_user, count(to_user) as cnt from ' . $bin_name . '_mentions m inner join ' . $bin_name . '_tweets t on t.id = m.tweet_id ' . $where .
+     //   ' group by to_user order by count(to_user) desc';
+
+    if (!is_null($limit)) {
+        $sql .= ' limit ' . $limit;
+    }
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+
+    $list = array();
+
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+        $hashtag = $res['text'];
+        $count = $res['cnt'];
+        $element = array ( 'hashtag' => $hashtag,
+                           'count' => $count );
+        $list[] = $element;
+    }
+
+    return $list;
+
+}
+
+//----------------------------------------------------------------
+// Top urls
+//
+// Retrieve information about the top urls in the time period
+// between $dt_start and $dt_end (inclusive).
+//
+// $query_bin - the array produced by ~/analysis/common/functions.php
+// $dt_start - must either be a DateTime object or NULL.
+// $dt_end - must either be a DateTime object or NULL.
+
+function urls_top($query_bin, $dt_start, $dt_end, $limit = NULL) {
+
+    global $esc;
+
+    // This function allows special arguments, similar to the TCAT front-end;
+    // therefore we validate and process those arguments here
+    if (!isset($_GET['dataset'])) {
+        $_GET['dataset'] = $query_bin;
+    }
+    validate_all_variables();
+
+    // Create WHERE clause to restrict to requested timestamp range
+    // Convert to sqlSubset() format
+    if (isset($dt_start) && isset($dt_end)) {
+        $dt_start->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['startdate'] = $dt_start->format('Y-m-d\TH:i:s');
+        $dt_end->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['enddate'] = $dt_end->format('Y-m-d\TH:i:s');
+    }
+    $where = sqlSubset();
+
+    // Query database
+
+    $dbh = pdo_connect();
+
+    $bin_name = $query_bin['bin'];
+
+    // NOTICE: This query does not define a cut-off point
+
+    $sql = 'select u.url_followed as url, u.domain as `domain`, count(u.url_followed) as cnt from ' . $bin_name . '_urls u inner join ' . $bin_name . '_tweets t on t.id = u.tweet_id '
+            . $where . ' group by u.url_followed order by count(u.url_followed) desc';
+
+    //$sql = 'select to_user, count(to_user) as cnt from ' . $bin_name . '_mentions m inner join ' . $bin_name . '_tweets t on t.id = m.tweet_id ' . $where .
+     //   ' group by to_user order by count(to_user) desc';
+
+    if (!is_null($limit)) {
+        $sql .= ' limit ' . $limit;
+    }
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+
+    $list = array();
+
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+        $url = $res['url'];
+        $domain = $res['domain'];
+        $count = $res['cnt'];
+        $element = array ( 'url' => $url,
+                           'domain' => $domain,
+                           'count' => $count );
+        $list[] = $element;
+    }
+
+    return $list;
+
+}
+
+//----------------------------------------------------------------
+// Top mentions
+//
+// Retrieve information about the top mentions in the time period
+// between $dt_start and $dt_end (inclusive).
+//
+// $query_bin - the array produced by ~/analysis/common/functions.php
+// $dt_start - must either be a DateTime object or NULL.
+// $dt_end - must either be a DateTime object or NULL.
+
+function mentions_top($query_bin, $dt_start, $dt_end, $limit = NULL)
+{
+
+    global $esc;
+
+    // This function allows special arguments, similar to the TCAT front-end;
+    // therefore we validate and process those arguments here
+    if (!isset($_GET['dataset'])) {
+        $_GET['dataset'] = $query_bin;
+    }
+    validate_all_variables();
+
+    // Create WHERE clause to restrict to requested timestamp range
+    // Convert to sqlSubset() format
+    if (isset($dt_start) && isset($dt_end)) {
+        $dt_start->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['startdate'] = $dt_start->format('Y-m-d\TH:i:s');
+        $dt_end->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['enddate'] = $dt_end->format('Y-m-d\TH:i:s');
+    }
+    $where = sqlSubset();
+
+    // Query database
+
+    $dbh = pdo_connect();
+
+    $bin_name = $query_bin['bin'];
+
+    // NOTICE: This query does not define a cut-off point
+
+    $sql = 'select to_user, count(to_user) as cnt from ' . $bin_name . '_mentions m inner join ' . $bin_name . '_tweets t on t.id = m.tweet_id ' . $where .
+           ' group by to_user order by count(to_user) desc';
+
+    if (!is_null($limit)) {
+        $sql .= ' limit ' . $limit;
+    }
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+
+    $list = array();
+
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+        $mention = $res['to_user'];
+        $count = $res['cnt'];
+        $element = array ( 'mention' => $mention,
+                           'count' => $count );
+        $list[] = $element;
+    }
+
+    return $list;
+
+}
+
+//----------------------------------------------------------------
+// Top tweeters
+//
+// Retrieve information about the top tweeters in the time period
+// between $dt_start and $dt_end (inclusive).
+//
+// $query_bin - the array produced by ~/analysis/common/functions.php
+// $dt_start - must either be a DateTime object or NULL.
+// $dt_end - must either be a DateTime object or NULL.
+
+function tweeters_top($query_bin, $dt_start, $dt_end, $limit = NULL)
+{
+
+    global $esc;
+
+    // This function allows special arguments, similar to the TCAT front-end;
+    // therefore we validate and process those arguments here
+    if (!isset($_GET['dataset'])) {
+        $_GET['dataset'] = $query_bin;
+    }
+    validate_all_variables();
+
+    // Create WHERE clause to restrict to requested timestamp range
+    // Convert to sqlSubset() format
+    if (isset($dt_start) && isset($dt_end)) {
+        $dt_start->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['startdate'] = $dt_start->format('Y-m-d\TH:i:s');
+        $dt_end->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['enddate'] = $dt_end->format('Y-m-d\TH:i:s');
+    }
+    $where = sqlSubset();
+
+    // Query database
+
+    $dbh = pdo_connect();
+
+    $bin_name = $query_bin['bin'];
+
+    // NOTICE: This query does not define a cut-off point
+
+    $sql = 'select count(t.id) as cnt, t.from_user_name as from_user_name from ' . $bin_name . '_tweets t ' . $where .
+           ' group by from_user_name order by count(t.id) desc';
+
+    if (!is_null($limit)) {
+        $sql .= ' limit ' . $limit;
+    }
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+
+    $list = array();
+
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+        $user = $res['from_user_name'];
+        $count = $res['cnt'];
+        $element = array ( 'user' => $user,
+                           'count' => $count );
+        $list[] = $element;
+    }
+
+    return $list;
+
+}
+
+
+//----------------------------------------------------------------
+// Top retweets
+//
+// Retrieve information about the top mentions in the time period
+// between $dt_start and $dt_end (inclusive).
+//
+// $query_bin - the array produced by ~/analysis/common/functions.php
+// $dt_start - must either be a DateTime object or NULL.
+// $dt_end - must either be a DateTime object or NULL.
+
+function retweets_top($query_bin, $dt_start, $dt_end, $limit = NULL) {
+
+    global $esc;
+
+    // This function allows special arguments, similar to the TCAT front-end;
+    // therefore we validate and process those arguments here
+    if (!isset($_GET['dataset'])) {
+        $_GET['dataset'] = $query_bin;
+    }
+    validate_all_variables();
+
+    // Create WHERE clause to restrict to requested timestamp range
+    // Convert to sqlSubset() format
+    if (isset($dt_start) && isset($dt_end)) {
+        $dt_start->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['startdate'] = $dt_start->format('Y-m-d\TH:i:s');
+        $dt_end->setTimezone(new DateTimeZone('UTC'));
+        $esc['datetime']['enddate'] = $dt_end->format('Y-m-d\TH:i:s');
+    }
+    $where = sqlSubset();
+
+    // Query database
+
+    $dbh = pdo_connect();
+
+    $bin_name = $query_bin['bin'];
+
+    // NOTICE: This query does not define a cut-off point
+
+    $sql = 'select T2.from_user_name as user, T2.text as text, t.text as rt_text, t.retweet_id as id, count(t.retweet_id) as cnt from ' . $bin_name . '_tweets t '.
+           'left join ' . $bin_name . '_tweets T2 on t.retweet_id = T2.id ' . $where .
+           ' and t.retweet_id is not null ' .
+           ' group by t.retweet_id order by count(t.retweet_id) desc';
+    if (!is_null($limit)) {
+        $sql .= ' limit ' . $limit;
+    }
+    // DEBUG BEGIN
+    file_put_contents("/tmp/debug.sql", $sql);
+    // DEBUG END
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+
+    $list = array();
+
+    while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
+        $id = $res['id'];
+        $user = $res['user'];
+        $count = $res['cnt'];
+        $text = $res['text'];
+        $rt_text = $res['rt_text'];
+        $element = array ( 'id' => $id,
+                           'user' => $user,
+                           'text' => $text,
+                           'rt_text' => $rt_text,
+                           'count' => $count );
+        $list[] = $element;
+    }
+
+    // We can now have tweets with user = NULL and text = NULL, if the original tweets was not in the dataset
+
+    for ($n = 0; $n < count($list); $n++) {
+        if (is_null($list[$n]['user'])) {
+            // As Twitter user names cannot contain a ':' character, this regular expression should match the original username
+            if (preg_match("/^RT @(.*?): (.*)$/", $list[$n]['rt_text'], $matches)) {
+                if (isset($matches[1])) {
+                   $list[$n]['user'] = $matches[1];
+                }
+                if (isset($matches[2])) {
+                    $list[$n]['text'] = $matches[2];
+                }
+            }
+        }
+        unset($list[$n]['rt_text']);
+    }
+
+    return $list;
+
+}
+

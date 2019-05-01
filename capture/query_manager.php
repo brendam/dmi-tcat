@@ -5,7 +5,7 @@ include_once __DIR__ . '/../common/constants.php';
 include_once __DIR__ . '/../common/functions.php';
 
 if (!is_admin())
-    die("Go away, you evil hacker!");
+    die("Sorry, access denied. Your username does not match the ADMIN user defined in the config.php file.");
 
 include_once __DIR__ . '/../common/functions.php';
 include_once __DIR__ . '/../capture/common/functions.php';
@@ -52,7 +52,7 @@ function create_new_bin($params) {
         echo '{"msg":"This capturing type is not defined in the config file"}';
         return;
     }
-    $comments = trim($params['newbin_comments']);
+    $comments = sanitize_comments($params['newbin_comments']);
 
     // check whether the main query management tables are there, if not, create
     create_admin();
@@ -98,6 +98,16 @@ function create_new_bin($params) {
             $phrases = array_trim_and_unique($phrases);
         } elseif ($type == "geotrack") {
             $phrases = get_phrases_from_geoquery($params["newbin_phrases"]);
+
+            // Validate geo phrases
+
+            foreach ($phrases as $geophrase) {
+                $area = geoPhraseArea($geophrase);
+                if ($area > 45.0) {
+                    echo '{"msg":"Cannot add geobox ' . $geophrase . '. Area is too large."}';
+                    return;
+                }
+            }
         }
 
         // populate the phrases and connector tables
@@ -415,10 +425,11 @@ function rename_bin($params) {
 
 function modify_bin_comments($querybin_id, $params) {
     $dbh = pdo_connect();
+    $comments = sanitize_comments($params['comments']);
     $sql = "UPDATE tcat_query_bins SET comments = :comments WHERE id = :querybin_id";
     $rec = $dbh->prepare($sql);
     $rec->bindParam(":querybin_id", $querybin_id, PDO::PARAM_INT);
-    $rec->bindParam(":comments", $params['comments'], PDO::PARAM_STR);
+    $rec->bindParam(":comments", $comments, PDO::PARAM_STR);
     $rec->execute();
     $dbh = false;
     echo '{"msg": "The comments have been modified"}';
@@ -558,6 +569,16 @@ function array_trim_and_unique($array) {
     return $array;
 }
 
+function sanitize_comments($comments) {
+    try {
+        $comments = trim($comments);
+        $comments = htmlspecialchars($comments, ENT_QUOTES);
+        return $comments;
+    } catch (Exception $e) {
+        throw $e;
+    }
+}
+
 function get_phrases_from_geoquery($query) {
     // make segments of four
     $phrases = array();
@@ -688,7 +709,7 @@ function getBins() {
     // select phrases
     // select users
 
-    $sql = "SELECT b.id, b.querybin, b.type, b.comments, b.active, period.starttime AS bin_starttime, period.endtime AS bin_endtime FROM tcat_query_bins b, tcat_query_bins_periods period WHERE b.id = period.querybin_id GROUP BY b.id";
+    $sql = "SELECT b.id, b.querybin, b.type, b.comments, b.active, period.starttime AS bin_starttime, period.endtime AS bin_endtime FROM tcat_query_bins b, tcat_query_bins_periods period WHERE b.id = period.querybin_id AND b.access != " . TCAT_QUERYBIN_ACCESS_INVISIBLE . " GROUP BY b.id";
 
     $rec = $dbh->prepare($sql);
     $rec->execute();
@@ -733,7 +754,7 @@ function getBins() {
                 $bin->phrases[$result['phrase_id']] = $phrase;
             }
         } elseif ($bin->type == "follow" || $bin->type == "timeline") {
-            $sql = "SELECT u.id AS user_id, bu.starttime AS user_starttime, bu.endtime AS user_endtime FROM tcat_query_users u, tcat_query_bins_users bu WHERE u.id = bu.user_id AND bu.querybin_id = " . $bin->id;
+            $sql = "SELECT u.id AS user_id, u.user_name, bu.starttime AS user_starttime, bu.endtime AS user_endtime FROM tcat_query_users u, tcat_query_bins_users bu WHERE u.id = bu.user_id AND bu.querybin_id = " . $bin->id;
             $rec = $dbh->prepare($sql);
             $rec->execute();
             $user_results = $rec->fetchAll();
@@ -741,6 +762,7 @@ function getBins() {
                 if (!isset($bin->users[$result['user_id']])) {
                     $user = new stdClass();
                     $user->id = $result['user_id'];
+                    $user->user_name = $result['user_name'];
                     $user->periods = array();
                     $user->active = false;
                 } else {

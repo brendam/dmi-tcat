@@ -18,10 +18,8 @@
 # Run with -h for help.
 #
 # Supported distributions:
-# - Ubuntu 14.04
-# - Ubuntu 15.04
-# - Ubuntu 15.10
-# - Debian 8.*
+# - Ubuntu 18.04
+# - Debian 9.*
 #
 #----------------------------------------------------------------
 
@@ -45,7 +43,6 @@ URLEXPANDYES=y # install URL Expander or not
 SERVERNAME= # should default to this machine's IP address (-s overrides)
 
 # TCAT
-
 TCAT_AUTO_UPDATE=0 # 0=off, 1=trivial, 2=substantial, 3=expensive
 
 # Unix user and group to own the TCAT files
@@ -348,11 +345,7 @@ if [ "$DISTRIBUTION_ID" = 'Ubuntu' ]; then
 	echo "$PROG: error: unexpected Ubuntu version: $UBUNTU_VERSION" >&2
 	exit 1
     fi
-    if [ \
-	"$UBUNTU_VERSION" != '14.04' -a \
-	"$UBUNTU_VERSION" != '15.04' -a \
-	"$UBUNTU_VERSION" != '15.10' \
-	]; then
+    if [ "$UBUNTU_VERSION" != '18.04' ]; then
 	if [ -z "$FORCE_INSTALL" ]; then
 	    echo "$PROG: error: unsupported distribution: Ubuntu $UBUNTU_VERSION" >&2
 	    exit 1
@@ -386,7 +379,7 @@ elif [ "$DISTRIBUTION_ID" = 'Debian' ]; then
 	echo "$PROG: error: unexpected Debian version: $DEBIAN_VERSION" >&2
 	exit 1
     fi
-    if [ "$DEBIAN_VERSION_MAJOR" != '8' ]; then
+    if [ -a "$DEBIAN_VERSION_MAJOR" != '9' ]; then
 	if [ -z "$FORCE_INSTALL" ]; then
 	    echo "$PROG: error: unsupported distribution: Debian $DEBIAN_VERSION" >&2
 	    exit 1
@@ -405,10 +398,16 @@ if [ -e "$TCAT_DIR" ]; then
     exit 1
 fi
 
+# Install Debian keyring
+
+if [ -n "$DEBIAN_VERSION" ]; then
+    apt-get install -y debian-archive-keyring debian-keyring
+fi
+
 # MySQL server package name for apt-get
 
 if [ -n "$UBUNTU_VERSION" ]; then
-    UBUNTU_MYSQL_SVR_PKG=mysql-server
+    UBUNTU_MYSQL_SVR_PKG=mariadb-server
 
     if dpkg --status $UBUNTU_MYSQL_SVR_PKG >/dev/null 2>&1; then
 	echo "$PROG: cannot install: $UBUNTU_MYSQL_SVR_PKG already installed" >&2
@@ -890,6 +889,8 @@ if [ "$BATCH_MODE" != 'y' ]; then
     echo ""
 fi
 
+apt-get -qq install -y git
+
 # Clear any existing TCAT crontab references
 echo "" > /etc/cron.d/tcat
 
@@ -943,27 +944,18 @@ echo "$PROG: installing Apache and PHP"
 
 if [ -n "$UBUNTU_VERSION" ]; then
     echo "$PROG: installing MySQL for Ubuntu"
-    apt-get -y install $UBUNTU_MYSQL_SVR_PKG mysql-client
+    apt-get -y install $UBUNTU_MYSQL_SVR_PKG mariadb-client
 
     echo "$PROG: installing Apache for Ubuntu"
     apt-get -y install apache2 apache2-utils
 
-    if [ "$UBUNTU_VERSION" = '16.04' ]; then
-        # This will install PHP 7 which is NOT supported by TCAT currently
-	PHP_PACKAGES="libapache2-mod-php php-mysql php-curl php-cli php-patchwork-utf8 php-mbstring"
-    else
-	# 14.04, 15.04, 15.10 and untested
-	PHP_PACKAGES="libapache2-mod-php5 php5-mysql php5-curl php5-cli php-patchwork-utf8"
-    fi
+    # This will install PHP 7
+    # Ubuntu versions starting from 17.04 have the PHP GEOS module in the repository
+    PHP_PACKAGES="libapache2-mod-php php-mysql php-curl php-cli php-patchwork-utf8 php-mbstring php-geos"
+
     echo "$PROG: installing PHP packages:"
     echo "  $PHP_PACKAGES"
     apt-get -y install $PHP_PACKAGES
-
-    if [ "$UBUNTU_VERSION_MAJOR" -eq 15 ]; then
-	echo "$PROG: installing PHP module for geographical search"
-	apt-get -y install php5-geos
-	php5enmod geos
-    fi
 
     # Installation and autoconfiguration of MySQL will not work with
     # Apparmor profile enabled
@@ -977,37 +969,68 @@ if [ -n "$UBUNTU_VERSION" ]; then
 elif [ -n "$DEBIAN_VERSION" ]; then
     echo "$PROG: installing MySQL for Debian"
 
-    apt-get -qq -y install wget
-
-    wget http://dev.mysql.com/get/mysql-apt-config_0.3.5-1debian8_all.deb
-
-    # Note: this prompts the user to choose the MySQL product to configure :-(
-    # TODO: find a debconf-set-selections setting to avoid user interaction
-    dpkg -i mysql-apt-config_0.3.5-1debian8_all.deb
-
     apt-get -y install mariadb-server
 
     echo "$PROG: installing Apache for Debian"
 
     apt-get -y install \
-	apache2-mpm-prefork apache2-utils \
-	libapache2-mod-php5 \
-	php5-mysql php5-curl php5-cli php5-geos php-patchwork-utf8
+    apache2-utils \
+    libapache2-mod-php7.0 \
+    php7.0-mysql php7.0-curl php7.0-cli php-patchwork-utf8 php7.0-mbstring
 
-    php5enmod geos
+    # Build and enable PHP GEOS module for PHP 7.0
+
+    apt-get install -y build-essential automake make gcc g++ php7.0-dev
+    wget http://download.osgeo.org/geos/geos-3.6.2.tar.bz2
+    tar -xjf geos-3.6.2.tar.bz2
+    cd geos-3.6.2/
+    ./configure --enable-php
+    make -j 4
+    make install
+    ldconfig
+    cd ../
+    git clone https://git.osgeo.org/gogs/geos/php-geos.git --depth 1
+    cd php-geos
+    sh autogen.sh
+    ./configure
+    make -j 4
+    make install
+    cd ../
+    echo "extension=geos.so" > /etc/php/7.0/mods-available/geos.ini
+    phpenmod geos
 
 else
     echo "$PROG: internal error: unexpected OS" >&2
     exit 3
 fi
 
+# Disable Linux HugePage support (needed for TokuDB)
+
+tput bold
+echo "Disabling Linux kernel transparant HugePage support" 1>&2
+tput sgr0
+echo never > /sys/kernel/mm/transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/defrag
+sed -E -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="(.*)"$/GRUB_CMDLINE_LINUX_DEFAULT="\1 transparent_hugepage=never"/' /etc/default/grub
+update-grub
+
+# Install the TokuDB storage engine
+
+tput bold
+echo "Installing TokuDB storage engine ..."
+tput sgr0
+
+apt-get -y install mariadb-plugin-tokudb
+# Enable the TokuDB storage engine
+sed -i 's/^#plugin-load-add=ha_tokudb.so/plugin-load-add=ha_tokudb.so/g' /etc/mysql/mariadb.conf.d/tokudb.cnf
+# Restart mariadb
+systemctl restart mariadb
+
 echo ""
 tput bold
 echo "Downloading DMI-TCAT from github ..."
 tput sgr0
 echo ""
-
-apt-get -qq install -y git
 
 if [ -z "$TCAT_GIT_BRANCH" ]; then
     # Can do a shallow clone to minimize the data download
@@ -1164,7 +1187,7 @@ fi
 
 echo ""
 tput bold
-echo "Configuring MySQL server for TCAT ..."
+echo "Configuring MySQL server for TCAT (authentication) ..."
 tput sgr0
 echo ""
 
@@ -1214,20 +1237,15 @@ sed -i "s/dbuser = \"\"/dbuser = \"$TCATMYSQLUSER\"/g" "$CFG"
 sed -i "s/dbpass = \"\"/dbpass = \"$TCATMYSQLPASS\"/g" "$CFG"
 sed -i "s/example.com\/dmi-tcat\//$SERVERNAME\//g" "$CFG"
 
-if [ "$URLEXPANDYES" == "y" ]; then
+if [ "$URLEXPANDYES" = 'y' ]; then
    echo ""
    tput bold
-   echo "Installation and configuration of the URL expander ..."
+   echo "Enabling URL expander ..."
    tput sgr0
    echo ""
-   apt-get install -y build-essential libevent-dev python-all-dev python-mysqldb python-setuptools python-pip
-   easy_install greenlet
-   easy_install gevent 
-   pip install requests
-   CRONLINE="0 *     * * *   $SHELLUSER   (cd \"$TCAT_DIR/helpers\"; sh urlexpand.sh)"
-   echo "" >> /etc/cron.d/tcat
-   echo "# Run DMI-TCAT URL expander every hour" >> /etc/cron.d/tcat
-   echo "$CRONLINE" >> /etc/cron.d/tcat
+   VAR=ENABLE_URL_EXPANDER
+   VALUE="TRUE"
+   sed -i "s|^define('$VAR',[^)]*);|define('$VAR', $VALUE);|" "$CFG"
 fi
 
 echo ""
@@ -1306,70 +1324,71 @@ sed -i "s/^define('$VARIABLE',[^)]*);/define('$VARIABLE', $VALUE);/g" "$CFG"
 
 apt-get -y install debsums
 
-# Note: previously this checked /etc/mysql/my.cnf, but that is a symlink
-# to /etc/alternatives/my.cnf which itself is symlink to /etc/mysql/mysql.cnf.
-# If modified, debsums reports that /etc/mysql/mysql.cnf has changed, but does
-# not report /etc/mysql/my.cnf has changed.
+# TCAT will not function fully on modern versions of MySQL without some modified settings
 
-if debsums -ce | grep "/etc/mysql/mysql.cnf" >/dev/null; then
-    # The MySQL config file was not changed: can attempt to fix memory profile
+echo "[mysqld]" > /etc/mysql/conf.d/tcat-autoconfigured.cnf
 
-    if [ "$DB_CONFIG_MEMORY_PROFILE" = "y" ]; then
-        echo ""
-        tput bold
-        echo "Attempting to adjust MySQL server profile ..."
-        tput sgr0
-        echo ""
-        MAXMEM=`free -m | head -n 2 | tail -n 1 | tr -s ' ' | cut -d ' ' -f 2`
-        # Make this an integer, and non-empty for bash
-        MAXMEM=${MAXMEM//[^[:digit:]]/0}
-        MAXMEM=${MAXMEM//^$/0}
-        echo "Maximum machine memory detected: $MAXMEM Mb"
-        if [ "$MAXMEM" -lt "1024" ]; then
-            echo "This machine has a limited ammount of memory; leaving system defaults in place."
+echo ""
+tput bold
+echo "Configuring MySQL server (compatibility) ..."
+tput sgr0
+echo ""
+
+echo "sql-mode=\"NO_AUTO_VALUE_ON_ZERO,ALLOW_INVALID_DATES\"" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+
+if [ "$DB_CONFIG_MEMORY_PROFILE" = "y" ]; then
+    echo ""
+    tput bold
+    echo "Configuring MySQL server (memory profile) ..."
+    tput sgr0
+    echo ""
+    MAXMEM=`free -m | head -n 2 | tail -n 1 | tr -s ' ' | cut -d ' ' -f 2`
+    # Make this an integer, and non-empty for bash
+    MAXMEM=${MAXMEM//[^[:digit:]]/0}
+    MAXMEM=${MAXMEM//^$/0}
+    echo "Maximum machine memory detected: $MAXMEM Mb"
+    if [ "$MAXMEM" -lt "1024" ]; then
+        echo "This machine has a limited ammount of memory; leaving system defaults in place."
+    else
+        # Set the key buffer to 1/3 of system memory
+        SIZE=$(($MAXMEM/3))
+        echo "key_buffer_size         = $SIZE""M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+        if [ "$MAXMEM" -gt "1024" ]; then
+            # Set the query cache limit to 128 Mb
+            echo "query_cache_limit       = 128M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
         else
-            echo "[mysqld]" > /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            # Set the key buffer to 1/3 of system memory
-            SIZE=$(($MAXMEM/3))
-            echo "key_buffer              = $SIZE""M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            if [ "$MAXMEM" -gt "1024" ]; then
-                # Set the query cache limit to 128 Mb
-                echo "query_cache_limit       = 128M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            else
-                # For machines with 1G memory or less, set the query cache limit to 64 Mb
-                echo "query_cache_limit       = 64M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            fi
-            # Set the total query cache size to 1/8 of systemn emory
-            SIZE=$(($MAXMEM/8))
-            echo "query_cache_size        = $SIZE""M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            # Increase sizes of temporary tables (memory sort tables for doing a GROUP BY) for machines with sufficient memory
-            if [ "$MAXMEM" -gt "7168" ]; then
-                echo "tmp_table_size          = 1G" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-                echo "max_heap_table_size     = 1G" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            elif [ "$MAXMEM" -gt "3072" ]; then
-                echo "tmp_table_size          = 256M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-                echo "max_heap_table_size     = 256M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            fi
-            # Unless we have a machine capable of performing many heavy queries simultaneously,
-            # it is sensible to restrict the maximum number of client connections. This will reduce the overcommitment of memory.
-            # The default max_connections for MySQL 5.6 is 150. In any case, even 80 is still a high figure.
-            if [ "$MAXMEM" -lt "31744" ]; then
-                echo "max_connections         = 80" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
-            fi
-            echo "Memory profile adjusted"
+            # For machines with 1G memory or less, set the query cache limit to 64 Mb
+            echo "query_cache_limit       = 64M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+        fi
+        # Set the total query cache size to 1/8 of systemn emory
+        SIZE=$(($MAXMEM/8))
+        echo "query_cache_size        = $SIZE""M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+        # Increase sizes of temporary tables (memory sort tables for doing a GROUP BY) for machines with sufficient memory
+        if [ "$MAXMEM" -gt "7168" ]; then
+            echo "tmp_table_size          = 1G" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+            echo "max_heap_table_size     = 1G" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+        elif [ "$MAXMEM" -gt "3072" ]; then
+            echo "tmp_table_size          = 256M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+            echo "max_heap_table_size     = 256M" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+        fi
+        # Unless we have a machine capable of performing many heavy queries simultaneously,
+        # it is sensible to restrict the maximum number of client connections. This will reduce the overcommitment of memory.
+        # The default max_connections for MySQL 5.6 is 150. In any case, even 80 is still a high figure.
+        if [ "$MAXMEM" -lt "31744" ]; then
+            echo "max_connections         = 80" >> /etc/mysql/conf.d/tcat-autoconfigured.cnf
+        fi
+        echo "Memory profile adjusted"
 
-            # Finally, reload MySQL server configuration
+        # Finally, reload MySQL server configuration
 
-	    if [ -n "$UBUNTU_VERSION" ]; then
-		echo "Restarting service ... "
-		/etc/init.d/mysql restart
-	    elif [ -n "$DEBIAN_VERSION" ]; then
-		echo "Reloading service ..."
-		systemctl reload mysql
-	    else
-		echo "$PROG: internal error: unexpected OS" >&2
-		exit 3
-	    fi
+        echo "Restarting service ..."
+        if [ -n "$UBUNTU_VERSION" ]; then
+            /etc/init.d/mysql restart
+        elif [ -n "$DEBIAN_VERSION" ]; then
+            systemctl restart mysql
+        else
+            echo "$PROG: internal error: unexpected OS" >&2
+            exit 3
         fi
     fi
 fi

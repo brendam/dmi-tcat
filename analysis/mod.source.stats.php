@@ -8,7 +8,7 @@ require_once __DIR__ . '/common/CSV.class.php'
 
 <html xmlns="http://www.w3.org/1999/xhtml">
     <head>
-        <title>TCAT :: User stats</title>
+        <title>TCAT :: Source stats</title>
 
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
 
@@ -24,7 +24,7 @@ require_once __DIR__ . '/common/CSV.class.php'
 
     <body>
 
-        <h1>TCAT :: User Stats</h1>
+        <h1>TCAT :: Source Stats</h1>
 
         <?php
         validate_all_variables();
@@ -32,31 +32,31 @@ require_once __DIR__ . '/common/CSV.class.php'
         $dbh = pdo_connect();
         pdo_unbuffered($dbh);
 
-        $filename = get_filename_for_export("userStats");
+        $filename = get_filename_for_export("sourceStats");
 
         $csv = new CSV($filename, $outputformat);
 
-        // tweets per user
-        $sql = "SELECT count(t.id) AS count, t.from_user_id, ";
+        // tweets per source
+        $sql = "SELECT count(t.id) AS count, source, ";
         $sql .= sqlInterval();
         $sql .= " FROM " . $esc['mysql']['dataset'] . "_tweets t ";
         $sql .= sqlSubset();
-        $sql .= "GROUP BY datepart, from_user_id";
+        $sql .= "GROUP BY datepart, source";
         //print $sql . "<br>";
 
         $array = array();
         $rec = $dbh->prepare($sql);
         $rec->execute();
         while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
-            $array[$res['datepart']][$res['from_user_id']] = $res['count'];
+            $array[$res['datepart']][$res['source']] = $res['count'];
         }
         if (!empty($array)) {
             foreach ($array as $date => $ar)
-                $stats[$date]['tweets_per_user'] = stats_summary($ar);
+                $stats[$date]['tweets_per_source'] = stats_summary($ar);
         }
 
         // users per interval
-        $sql = "SELECT count(distinct(t.from_user_id)) AS count, ";
+        $sql = "SELECT count(distinct(t.source)) AS count, ";
         $sql .= sqlInterval();
         $sql .= " FROM " . $esc['mysql']['dataset'] . "_tweets t ";
         $sql .= sqlSubset();
@@ -69,52 +69,27 @@ require_once __DIR__ . '/common/CSV.class.php'
             $array[$res['datepart']] = $res['count'];
         }
         if (!empty($array)) {
-            $stats['all dates']['users_per_date'] = stats_summary($array);
+            $stats['all dates']['sources_per_date'] = stats_summary($array);
         }
 
-        // urls per user per interval
-        $sql = "SELECT count(distinct(u.url)) AS count, u.from_user_id, ";
+        // urls per source per interval
+        $sql = "SELECT count(distinct(u.url)) AS count, t.source, ";
         $sql .= sqlInterval();
         $sql .= " FROM " . $esc['mysql']['dataset'] . "_urls u, " . $esc['mysql']['dataset'] . "_tweets t ";
         $where = "t.id = u.tweet_id AND ";
         $sql .= sqlSubset($where);
-        $sql .= "GROUP BY datepart, from_user_id";
+        $sql .= "GROUP BY datepart, source";
         //print $sql."<br>";
         $array = array();
-        $rec = $dbh->prepare($sql);
+        $rec = $dbh->prepare($sql); 
         $rec->execute();
         while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
-            $array[$res['datepart']][$res['from_user_id']] = $res['count'];
+            $array[$res['datepart']][$res['source']] = $res['count'];
         }
         if (!empty($array)) {
             foreach ($array as $date => $ar)
-                $stats[$date]['urls_per_user'] = stats_summary($ar);
+                $stats[$date]['urls_per_source'] = stats_summary($ar);
         }
-
-        // select latest user info per interval
-        $sql = "SELECT max(t.created_at), t.from_user_id, t.from_user_followercount, t.from_user_friendcount, t.from_user_tweetcount, ";
-        $sql .= sqlInterval();
-        $sql .= " FROM " . $esc['mysql']['dataset'] . "_tweets t ";
-        $sql .= sqlSubset();
-        $sql .= "GROUP BY datepart, from_user_id";
-        //print $sql."<bR>";
-        $array = array();
-        $rec = $dbh->prepare($sql);
-        $rec->execute();
-        while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
-            $array[$res['datepart']]['followercount'][$res['from_user_id']] = $res['from_user_followercount'];
-            $array[$res['datepart']]['friendcount'][$res['from_user_id']] = $res['from_user_friendcount'];
-            $array[$res['datepart']]['tweetcount'][$res['from_user_id']] = $res['from_user_tweetcount'];
-        }
-        if (!empty($array)) {
-            foreach ($array as $date => $ar) {
-                $stats[$date]['followercount'] = stats_summary($ar['followercount']);
-                $stats[$date]['friendcount'] = stats_summary($ar['friendcount']);
-                $stats[$date]['tweetcount'] = stats_summary($ar['tweetcount']);
-            }
-        }
-
-        // @todo: aantal retweets
 
         $csv->writeheader(array("date", "what", "min", "max", "avg", "Q1", "median", "Q3", "25%TrimmedMean"));
         foreach ($stats as $date => $datestats) {

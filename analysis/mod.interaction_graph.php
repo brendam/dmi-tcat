@@ -28,6 +28,9 @@ require_once __DIR__ . '/common/Gexf.class.php';
 
         <?php
         validate_all_variables();
+        dataset_must_exist();
+        $dbh = pdo_connect();
+        // NOTICE: this script does nested queries, therefore we do must use buffered queries
 
         $min_nr_of_nodes = $esc['shell']['minf'];
 
@@ -35,13 +38,14 @@ require_once __DIR__ . '/common/Gexf.class.php';
         $collation = current_collation();
 
         // get all tweets which have in_reply_to_status_id set
-        $sql = "SELECT id, created_at, from_user_name COLLATE $collation as from_user_name, text COLLATE $collation as text, in_reply_to_status_id, from_user_lang, from_user_tweetcount, from_user_followercount, from_user_friendcount, from_user_listed, source COLLATE $collation as source, geo_lng, geo_lat  FROM " . $esc['mysql']['dataset'] . "_tweets t ";
+        $sql = "SELECT t.id, created_at, from_user_name COLLATE $collation as from_user_name, text COLLATE $collation as text, in_reply_to_status_id, from_user_lang, from_user_tweetcount, from_user_followercount, from_user_friendcount, from_user_listed, source COLLATE $collation as source, geo_lng, geo_lat  FROM " . $esc['mysql']['dataset'] . "_tweets t ";
         $sql .= sqlSubset();
         $sql .= " AND in_reply_to_status_id != '' ORDER BY id ";
 
         $paths = $path_locations = $indegree = $outdegree = array();
-        $rec = mysql_unbuffered_query($sql);
-        while ($res = mysql_fetch_assoc($rec)) {
+        $rec = $dbh->prepare($sql);
+        $rec->execute();
+        while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
             $id = $res['id'];
             $from_user_name = $res['from_user_name'];
             $text = $res['text'];
@@ -83,7 +87,6 @@ require_once __DIR__ . '/common/Gexf.class.php';
                 $path_locations[$in_reply_to_status_id] = $curloc;
             }
         }
-        mysql_free_result($rec);
 
         // calculate how many nodes there are per path
         $paths_node_counts = $todo = array();
@@ -232,7 +235,7 @@ require_once __DIR__ . '/common/Gexf.class.php';
             if ($id2 !== false && isset($gexf->nodeObjects[$id2]))
                 $node2 = $gexf->nodeObjects[$id2];
             $node2->addNodeAttribute('tweet_id', $tweet_id, 'string');
-            $node2->addNodeAttribute('tweet_id', $tweets[$tweet_id]['created_at'], 'string');
+            $node2->addNodeAttribute('created_at', $tweets[$tweet_id]['created_at'], 'string');
             $node2->addNodeAttribute('in_reply_to_status_id', $in_reply_to_status_id, 'string');
             $node2->addNodeAttribute('tweet', $tweets[$tweet_id]['text'], 'string');
             $node2->addNodeAttribute('user', $tweets[$tweet_id]['from_user_name'], 'string');
@@ -276,12 +279,14 @@ require_once __DIR__ . '/common/Gexf.class.php';
 function getTweet($id) {
     global $esc;
     global $collation;
+    global $dbh;
     $sql = "SELECT id, created_at, from_user_name COLLATE $collation as from_user_name, text COLLATE $collation as text, in_reply_to_status_id, from_user_lang, from_user_tweetcount, from_user_followercount, from_user_friendcount, from_user_listed, source COLLATE $collation as source FROM " . $esc['mysql']['dataset'] . "_tweets t WHERE id = $id";
-    $rec = mysql_query($sql);
-    if (mysql_num_rows($rec) > 0) {
-        $res = mysql_fetch_assoc($rec);
+    $rec = $dbh->prepare($sql);
+    $rec->execute();
+    if ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
         return $res;
-    } else
+    } else {
         return false;
+    }
 }
 ?>

@@ -7,21 +7,21 @@ require_once __DIR__ . '/common/functions.php';
 
 <html xmlns="http://www.w3.org/1999/xhtml">
     <head>
-        <title>TCAT :: Retweet URLs</title>
+        <title>TCAT :: Modulation Sequencer</title>
 
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
 
         <link rel="stylesheet" href="css/main.css" type="text/css" />
 
         <style>
-            .contropedia_inserted {
+            .modulation_inserted {
                 color: #006837;
                 background-color: rgb(221, 255, 221);
                 line-height: 150%;
                 padding: 2px;
             }
 
-            .contropedia_deleted {
+            .modulation_deleted {
                 color: #DB211D;
                 background-color: rgb(247, 200, 200);
                 line-height: 150%;
@@ -54,8 +54,17 @@ require_once __DIR__ . '/common/functions.php';
                 cursor: pointer;
             }
             .seperator {
-                padding-right: 2px; 
+                padding-right: 2px;
                 border-right: 1px solid grey;
+            }
+            a, a:active, a:visited, a:hover {
+                color: black;
+                font-size: 11px;
+            }
+            td a, td a:active, td a:visited, td a:hover {
+                text-decoration: none;
+                color: black;
+                font-size: 5px;
             }
         </style>
         <script type='text/javascript' src='scripts/jquery-1.7.1.min.js'></script>
@@ -64,7 +73,7 @@ require_once __DIR__ . '/common/functions.php';
                 var currentscale = 1;
                 $('#zoomin').click(function(){
                     currentscale = currentscale + 0.4;
-                    
+
                     $('#content').css({
                         'transform': 'scale(' + currentscale + ')',
                         '-moz-transform': 'scale(' + currentscale + ')',
@@ -98,84 +107,93 @@ require_once __DIR__ . '/common/functions.php';
 
     <body>
 
-        <h1>TCAT :: Retweet URLs</h1>
+        <h1>TCAT :: Modulation Sequencer</h1>
 
         <?php
         validate_all_variables();
+        dataset_must_exist();
+        $dbh = pdo_connect();
+        pdo_unbuffered($dbh);
         $collation = current_collation();
 
         $sql = "SELECT t.id, t.text COLLATE $collation as text, t.created_at, t.from_user_name COLLATE $collation as from_user_name, t.source COLLATE $collation as source FROM " . $esc['mysql']['dataset'] . "_tweets t ";
         $sql .= sqlSubset();
         $sql .= " ORDER BY ID";
         //print $sql; die;
-        $rec = mysql_unbuffered_query($sql);
-        while ($res = mysql_fetch_assoc($rec)) {
+        $rec = $dbh->prepare($sql);
+        $rec->execute();
+        while ($res = $rec->fetch(PDO::FETCH_ASSOC)) {
             $tweets[$res['id']] = $res['text'];
             $dates[$res['id']] = $res['created_at'];
             $tweets_short[$res['id']] = trim(preg_replace("/:\s*$/", "", preg_replace("/[\"'“]/", "", preg_replace("/\.\.\./", "", preg_replace("/[\[]*https?:[^\s]*[\]]*/", "", preg_replace("/@[^\s]*/", "", preg_replace("/RT @.*?:\s*/", "", $res['text'])))))));
             $users[$res['id']] = $res['from_user_name'];
             $sources[$res['id']] = preg_replace("/<a href=.*>(.+?)<.*/","\\1",$res['source']);
         }
-        mysql_free_result($rec);
 
         $tweets_short_count = array_count_values($tweets_short);
         foreach ($tweets_short_count as $short => $count) {
             if ($count > 1) {
                 $tweets_short_ids = array_keys($tweets_short,$short);
                 foreach ($tweets_short_ids as $id)
-                    $retweets_short[$tweets[$id]] = $short;
+                    $modulations_short[$tweets[$id]] = $short;
             }
         }
 
-        $indentation = array_values($retweets_short);
+        $indentation = array_values($modulations_short);
         $indentation = array_unique($indentation);
         $indentation = array_values($indentation);
 
-        // find first occurrence of text of retweet
-        foreach ($retweets_short as $text => $short_text) {
-            $first_retweet[$text] = array_search(array_search($short_text, $retweets_short), $tweets);
+        // find first occurrence of text of modulation
+        foreach ($modulations_short as $text => $short_text) {
+            $first_modulation[$text] = array_search(array_search($short_text, $modulations_short), $tweets);
         }
-        $first_retweet_ids = array_values($first_retweet);
-        sort($first_retweet_ids);
-        $first_tweet = $tweets[$first_retweet_ids[0]];
-        $first_tweet_short = $retweets_short[$first_tweet];
+        $first_modulation_ids = array_values($first_modulation);
+        sort($first_modulation_ids);
+        $first_tweet = $tweets[$first_modulation_ids[0]];
+        $first_tweet_short = $modulations_short[$first_tweet];
 
-        // calculate levenshtein and diff for first occurences of modified text of retweet
+        // calculate levenshtein and diff for first occurences of modified text of modulation
         $levenshtein = $diffs = array();
-        foreach ($first_retweet as $text => $id) {
+        foreach ($first_modulation as $text => $id) {
             if (empty($levenshtein)) {
                 $levenshtein[$first_tweet_short] = 0;
-                $diffs[$retweets_short[$text]] = $retweets_short[$text];
+                $diffs[$modulations_short[$text]] = $modulations_short[$text];
             } else {
-                $levenshtein[$retweets_short[$text]] = levenshtein($first_tweet_short, $retweets_short[$text]);
+                $levenshtein[$modulations_short[$text]] = levenshtein($first_tweet_short, $modulations_short[$text]);
                 $diffClass = new Diff();
-                $diffs[$retweets_short[$text]] = $diffClass->renderDiff($diffClass->stringDiff($first_tweet_short, $retweets_short[$text]));
+                $diffs[$modulations_short[$text]] = $diffClass->renderDiff($diffClass->stringDiff($first_tweet_short, $modulations_short[$text]));
             }
         }
-        
-        echo "<Br>Zoom: <span id='zoomin' class='zoom'>in</span> / <span id='zoomout' class='zoom'>out</span><Br>";
+
+        echo "<br>";
+        echo "Similar tweets are highlighted in the same colour. Each colour is given its own column to the right in the order they first appear.<br>";
+        echo "Click here to zoom: <span id='zoomin' class='zoom'>in</span> / <span id='zoomout' class='zoom'>out</span>.<br>";
+        echo "Click 'timestamp' to view the tweet on Twitter.<br>";
+        echo "'Source' connotes the utility used to post the Tweet. See the <a href='https://developer.twitter.com/en/docs/tweets/data-dictionary/overview/tweet-object' target='_blank'>API documentation</a>.<br>";
+        echo "Hover over text in the left column to view changes with respect to the first tweet.<br>";
+        echo "See Moats and Borra (2018) for a full explanation of the tool.<br>";
+
         echo '<fieldset class="if_parameters">';
 
-        echo '<legend>Retweet URLs</legend>';
+        echo '<legend>Tweet modulations</legend>';
 
         print "<div id='content'>";
-        //$palette = array("108cbf", "f62221", "008027", "97c932", "fad40d", "f8962b", "c99997", "7e7e7e", "cbcbcb", "44bdec", "ff6364", "42c168", "bced5e"); // issue crawler
-        //$palette = array_reverse($palette);
+
         $palette = array("#90C4A7", "#EDA391", "#DEE287", "#DAC0D8", "#E0B97B", "#D6D0AA", "#A9DFDE", "#A2D093", "#D4D5CC", "#BABD7B", "#D6B4A2", "#E8ABBC", "#B0C1D0", "#D9EFAC", "#B6EECA");
 
-        asort($first_retweet);
-        $distinct_retweets = count($indentation);
+        asort($first_modulation);
+        $distinct_modulations = count($indentation);
         print "<table cellspacing='0' cellpadding='0'>";
         // header row
         print "<tr><td>date</td><td>user</td><td>source</td><td class='seperator'>tweet</td>";
-        foreach ($first_retweet_ids as $id)
+        foreach ($first_modulation_ids as $id)
             print "<td></td>";
         // content
         print "</tr>";
         foreach ($tweets as $id => $tweet) {
             $indent_level = -1;
-            if (isset($first_retweet[$tweet]))
-                $indent_level = array_search($retweets_short[$tweet], $indentation);
+            if (isset($first_modulation[$tweet]))
+                $indent_level = array_search($modulations_short[$tweet], $indentation);
             $bgcolor = "";
             if ($indent_level >= 0) {
                 $palette_index = $indent_level % count($palette);
@@ -183,20 +201,20 @@ require_once __DIR__ . '/common/functions.php';
             }
 
             print "<tr>";
-            print "<td style='padding-right: 5px;'>" . $dates[$id] . "</td>";
+            print "<td style='padding-right: 5px;'><a href='https://twitter.com/".$users[$id]."/status/".$id."' target='_blank'>" . $dates[$id] . "</a></td>";
             print "<td style='padding-right: 5px;'>" . $users[$id] . "</td>";
             print "<td style='padding-right: 5px;'>" . $sources[$id] . "</td>";
 
-            if (!array_key_exists($tweet, $retweets_short)) {
+            if (!array_key_exists($tweet, $modulations_short)) {
                 print "<td class='seperator' style='$bgcolor'>" . str_replace(" URL URL", " URL", preg_replace("/[\[]*https?:[^\s]*[\]]*/", "URL", $tweet)) . "</td>";
                 // make sure we have enought tds
-                for ($i = 0; $i < $distinct_retweets; $i++)
+                for ($i = 0; $i < $distinct_modulations; $i++)
                     print "<td></td>";
                 continue;
             } else {
                 print "<td class='tweetdiff seperator'>";
                 print "<span class='tweet' style='$bgcolor'>" . str_replace(" URL URL", " URL", preg_replace("/[\[]*https?:[^\s]*[\]]*/", "URL", $tweet)) . "</span>";
-                print "<span class='diff' style='display:none'>" . $diffs[$retweets_short[$tweet]] . "</span>";
+                print "<span class='diff' style='display:none'>" . $diffs[$modulations_short[$tweet]] . "</span>";
                 print "</td>";
             }
 
@@ -205,9 +223,9 @@ require_once __DIR__ . '/common/functions.php';
                 print "<td></td>";
             }
             print "<td>";
-            print "<span class='tweet' style='$bgcolor'>" . $retweets_short[$tweet] . "</span>";
+            print "<span class='tweet' style='$bgcolor'>" . $modulations_short[$tweet] . "</span>";
             print "</td>";
-            for ($i = $indent_level; $i < $distinct_retweets; $i++)
+            for ($i = $indent_level; $i < $distinct_modulations; $i++)
                 print "<td></td>";
             print "</tr>";
         }
@@ -295,8 +313,8 @@ class Diff {
         $str = "";
         foreach ($diff as $val) {
             if (is_array($val)) {
-                $del = $val['-'] !== array() && !empty($val['-']) ? "<span class='contropedia_deleted'>" . $val['-'] . "</span>" : '';
-                $ins = $val['+'] !== array() && !empty($val['+']) ? "<span class='contropedia_inserted'>" . $val['+'] . "</span>" : '';
+                $del = $val['-'] !== array() && !empty($val['-']) ? "<span class='modulation_deleted'>" . $val['-'] . "</span>" : '';
+                $ins = $val['+'] !== array() && !empty($val['+']) ? "<span class='modulation_inserted'>" . $val['+'] . "</span>" : '';
                 $str .= $del . $ins;
             }
             else
